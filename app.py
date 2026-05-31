@@ -31,6 +31,11 @@ try:
 except Exception:
     get_geolocation = None
 
+try:
+    from supabase import create_client
+except Exception:
+    create_client = None
+
 # ==========================================
 # ⚡ 1. ARAYÜZ VE TEMA (İkon Gizleme & CSS)
 # ==========================================
@@ -133,6 +138,8 @@ if "kurumsal_panel" not in st.session_state: st.session_state.kurumsal_panel = "
 if "tespit_kutulari_goster" not in st.session_state: st.session_state.tespit_kutulari_goster = True
 if "canli_kamera_konum" not in st.session_state: st.session_state.canli_kamera_konum = None
 if "canli_kamera_konum_mesaj" not in st.session_state: st.session_state.canli_kamera_konum_mesaj = ""
+if "supabase_son_mesaj" not in st.session_state: st.session_state.supabase_son_mesaj = ""
+if "kullanici_adi" not in st.session_state: st.session_state.kullanici_adi = "Saha Kullanıcısı"
 
 def log_ekle(islem, *detaylar):
     detay = " | ".join(str(d) for d in detaylar if d is not None and str(d).strip() != "")
@@ -167,6 +174,117 @@ def _secret_get(anahtar, varsayilan=""):
         pass
     return str(os.getenv(anahtar, varsayilan))
 
+
+
+def supabase_ayarlari():
+    """Supabase ortak kayıt sistemini Secrets/ortam değişkenlerinden okur."""
+    url = _secret_get("SUPABASE_URL", "").strip()
+    key = _secret_get("SUPABASE_SERVICE_ROLE_KEY", "").strip() or _secret_get("SUPABASE_KEY", "").strip()
+    table = _secret_get("SUPABASE_TABLE", "gridai_analizler").strip() or "gridai_analizler"
+    return {"url": url, "key": key, "table": table, "aktif": bool(url and key and create_client is not None)}
+
+
+@st.cache_resource(show_spinner=False)
+def supabase_client_olustur(url, key):
+    if create_client is None:
+        return None
+    return create_client(url, key)
+
+
+def supabase_client_getir():
+    ayar = supabase_ayarlari()
+    if not ayar["aktif"]:
+        return None, ayar, "Supabase aktif değil veya paket/secret eksik."
+    try:
+        return supabase_client_olustur(ayar["url"], ayar["key"]), ayar, "Supabase bağlı."
+    except Exception as e:
+        return None, ayar, f"Supabase istemcisi oluşturulamadı: {e}"
+
+
+def _num_or_none(v):
+    try:
+        if v is None or v == "":
+            return None
+        return float(v)
+    except Exception:
+        return None
+
+
+def _risk_seviyesi(risk):
+    try:
+        r = float(risk)
+    except Exception:
+        r = 0
+    if r >= 80:
+        return "Kritik"
+    if r >= 55:
+        return "Yüksek"
+    if r >= 30:
+        return "Orta"
+    return "Düşük"
+
+
+def supabase_satir_hazirla(analiz, vp, kullanici_adi, cihaz_turu="Web Panel"):
+    """Analiz kaydını Supabase tablo kolonlarına uygun sade dict'e çevirir."""
+    return {
+        "kullanici_adi": kullanici_adi or "Saha Kullanıcısı",
+        "cihaz_turu": cihaz_turu,
+        "kaynak": analiz.get("analiz_kaynagi", "Streamlit"),
+        "rapor_token": vp.get("token", ""),
+        "dosya_adi": analiz.get("dosya", ""),
+        "gorsel_hash": analiz.get("hash", ""),
+        "tespit": analiz.get("anomali", ""),
+        "guven": _num_or_none(analiz.get("guven", 0)),
+        "risk_skoru": _num_or_none(analiz.get("risk_skoru", 0)),
+        "risk_seviyesi": _risk_seviyesi(analiz.get("risk_skoru", 0)),
+        "enlem": _num_or_none(analiz.get("lat", vp.get("enlem"))),
+        "boylam": _num_or_none(analiz.get("lon", vp.get("boylam"))),
+        "konum_kaynagi": analiz.get("konum_kaynagi", ""),
+        "veri_guvenilirligi": str(analiz.get("veri_guvenilirligi", "")),
+        "hava_sicakligi": _num_or_none(vp.get("hava", {}).get("temp")),
+        "ruzgar": _num_or_none(vp.get("hava", {}).get("ruzgar")),
+        "nem": _num_or_none(vp.get("hava", {}).get("nem")),
+        "ai_yorum": analiz.get("ai_detay", "") or analiz.get("tavsiye", ""),
+    }
+
+
+def supabase_analizleri_kaydet(analizler, vp, kullanici_adi, cihaz_turu="Web Panel"):
+    """Analizleri ortak Supabase veritabanına kaydeder. Hata olursa uygulamayı düşürmez."""
+    if not analizler:
+        return False, "Supabase'e kaydedilecek analiz yok."
+    client, ayar, msg = supabase_client_getir()
+    if client is None:
+        return False, msg
+    try:
+        satirlar = [supabase_satir_hazirla(a, vp, kullanici_adi, cihaz_turu) for a in analizler]
+        # Aynı hash tekrar kaydedilse bile jüri demosunda sorun çıkarmasın diye insert basit tutuldu.
+        res = client.table(ayar["table"]).insert(satirlar).execute()
+        return True, f"{len(satirlar)} analiz Supabase ortak veritabanına kaydedildi."
+    except Exception as e:
+        return False, f"Supabase kayıt hatası: {e}"
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def supabase_analizleri_getir(limit=50):
+    """Son saha analizlerini Supabase'den okur. 10 sn cache ile Cloud performansını korur."""
+    ayar = supabase_ayarlari()
+    if not ayar["aktif"]:
+        return [], "Supabase aktif değil."
+    if create_client is None:
+        return [], "supabase paketi requirements.txt içinde yok veya yüklenemedi."
+    try:
+        client = supabase_client_olustur(ayar["url"], ayar["key"])
+        res = client.table(ayar["table"]).select("*").order("created_at", desc=True).limit(int(limit)).execute()
+        return (res.data or []), "Supabase kayıtları okundu."
+    except Exception as e:
+        return [], f"Supabase okuma hatası: {e}"
+
+
+def supabase_df(kayitlar):
+    kolonlar = ["created_at", "kullanici_adi", "cihaz_turu", "rapor_token", "tespit", "guven", "risk_skoru", "risk_seviyesi", "enlem", "boylam", "konum_kaynagi", "veri_guvenilirligi", "dosya_adi"]
+    if not kayitlar:
+        return pd.DataFrame(columns=kolonlar)
+    return pd.DataFrame([{k: r.get(k, "") for k in kolonlar} for r in kayitlar])
 
 def roboflow_ayarlari():
     """
@@ -1120,7 +1238,12 @@ def genis_pdf_olustur(path, vp):
 # ==========================================
 with st.sidebar:
     st.markdown("""<div class="logo-container"><h2 style="margin:0;">⚡ GridAI Panel</h2></div>""", unsafe_allow_html=True)
-    
+
+    st.subheader("👤 Kullanıcı")
+    kullanici_adi = st.text_input("Kullanıcı adı / saha personeli", value=st.session_state.get("kullanici_adi", "Saha Kullanıcısı"))
+    st.session_state.kullanici_adi = kullanici_adi
+
+    st.markdown("---")
     arama_token = st.text_input("🔍 Arşiv Kodunu Giriniz:")
     if st.button("Arşivi Getir", use_container_width=True):
         st.session_state.yuklenen_arsiv = arama_token
@@ -1175,6 +1298,16 @@ with st.sidebar:
     else:
         st.warning("Roboflow API girilmedi; demo/mock mod aktif")
         st.caption("API anahtarını .streamlit/secrets.toml veya Streamlit Cloud > Secrets alanına ekleyin.")
+
+    st.markdown("---")
+    st.subheader("🗄️ Ortak Veri Tabanı")
+    sb_ayar = supabase_ayarlari()
+    if sb_ayar["aktif"]:
+        st.success("Supabase bağlı")
+        st.caption(f"Tablo: {sb_ayar['table']}")
+    else:
+        st.warning("Supabase kapalı/eksik")
+        st.caption("SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY ve SUPABASE_TABLE Secrets alanında olmalı.")
 
     st.markdown("---")
     st.subheader("🧩 Görsel Tespit Ayarı")
@@ -1261,7 +1394,16 @@ folium.TileLayer("OpenStreetMap", name="Sokak Haritası").add_to(m)
 folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Uydu Görünümü').add_to(m)
 folium.TileLayer(tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr='OpenTopoMap', name='Topografik Harita').add_to(m)
 
+# Ortak Supabase kayıtları: telefon ve web panel aynı saha kayıtlarını görsün diye harita katmanına eklenir.
+supabase_kayitlar, supabase_okuma_mesaj = supabase_analizleri_getir(limit=75)
+
 heat_points = []
+for r in supabase_kayitlar:
+    try:
+        if r.get("enlem") is not None and r.get("boylam") is not None:
+            heat_points.append([float(r.get("enlem")), float(r.get("boylam")), max(0.15, min(float(r.get("risk_skoru") or 0) / 100.0, 1.0))])
+    except Exception:
+        pass
 for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
     try:
         agirlik = heatmap_agirligi_hesapla(a)
@@ -1273,6 +1415,32 @@ if heat_points:
 else:
     st.caption("Isı haritası, analiz yapılan görsellerin risk skoru + arıza sınıfı + veri güvenilirliğiyle oluşturulur. Henüz analiz noktası olmadığı için ısı katmanı boş.")
 folium.Marker([enlem, boylam], popup=f"{adres_detay}", icon=folium.Icon(color="red", icon="bolt", prefix="fa")).add_to(m)
+
+for r in supabase_kayitlar:
+    try:
+        if r.get("enlem") is None or r.get("boylam") is None:
+            continue
+        popup = f"""
+        <b>Ortak Kayıt / {r.get('rapor_token','')}</b><br>
+        Kullanıcı: {r.get('kullanici_adi','')}<br>
+        Cihaz: {r.get('cihaz_turu','')}<br>
+        Tespit: {r.get('tespit','')}<br>
+        Güven: %{r.get('guven',0)}<br>
+        Risk: %{r.get('risk_skoru',0)} ({r.get('risk_seviyesi','')})<br>
+        Konum Kaynağı: {r.get('konum_kaynagi','')}<br>
+        Tarih: {str(r.get('created_at',''))[:19]}
+        """
+        folium.CircleMarker(
+            location=[float(r.get("enlem")), float(r.get("boylam"))],
+            radius=6,
+            popup=folium.Popup(popup, max_width=340),
+            color="#F59E0B",
+            fill=True,
+            fill_color="#F59E0B",
+            fill_opacity=0.65,
+        ).add_to(m)
+    except Exception:
+        pass
 
 for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
     try:
@@ -1506,6 +1674,13 @@ if st.session_state.get("gorsel_kuyrugu"):
     st.markdown("### 📋 Anlık Analiz Tablosu")
     st.dataframe(analizleri_df(st.session_state.gorsel_kuyrugu), use_container_width=True)
 
+st.markdown("### 🌐 Ortak Canlı Saha Analizleri")
+if supabase_kayitlar:
+    st.caption("Telefon/tablet veya web panel üzerinden Supabase'e kaydedilen son analizler burada ortak görünür.")
+    st.dataframe(supabase_df(supabase_kayitlar), use_container_width=True)
+else:
+    st.caption(f"Henüz ortak Supabase kaydı görünmüyor. Durum: {supabase_okuma_mesaj}")
+
 st.markdown("---")
 
 # ==========================================
@@ -1545,8 +1720,19 @@ with b1:
     if st.button("💾 Arşiv", use_container_width=True):
         st.session_state.db[token] = vp
         db_kaydet(st.session_state.db)
-        log_ekle("KAYIT", f"{token} arşive kaydedildi")
-        st.success("Kayıt başarılı!")
+        log_ekle("KAYIT", f"{token} yerel arşive kaydedildi")
+        cihaz_turu = "Mobil/Tablet" if any("Canlı" in str(a.get("analiz_kaynagi", "")) for a in (analizler_rapor or [])) else "Web Panel"
+        ok, sb_msg = supabase_analizleri_kaydet(analizler_rapor, vp, st.session_state.get("kullanici_adi", "Saha Kullanıcısı"), cihaz_turu=cihaz_turu)
+        st.session_state.supabase_son_mesaj = sb_msg
+        if ok:
+            try:
+                supabase_analizleri_getir.clear()
+            except Exception:
+                pass
+            log_ekle("SUPABASE", sb_msg)
+            st.success("Kayıt başarılı! Yerel arşiv + Supabase ortak veritabanı güncellendi.")
+        else:
+            st.warning(f"Yerel arşiv kaydedildi; Supabase kaydı yapılamadı. Detay: {sb_msg}")
 
 with b2:
     pdf_name = f"Rapor_{token}.pdf"
