@@ -52,18 +52,8 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Kopyalama yaparken Önbellek temizleme menüsünü engelleyen kod
-st.components.v1.html("""
-<script>
-    const doc = window.parent.document;
-    doc.addEventListener('keydown', function(e) {
-        if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) {
-            e.stopPropagation();
-            e.preventDefault();
-        }
-    }, true);
-</script>
-""", height=0)
+# Streamlit Cloud'da frontend DOM hatası oluşturmaması için özel JavaScript enjeksiyonu kaldırıldı.
+# Tasarım, harita, Roboflow, GPS ve rapor akışı etkilenmez.
 
 # ==========================================
 # ⚡ 2. GARANTİLİ TÜRKÇE PDF FONT MOTORU
@@ -1503,36 +1493,14 @@ else:
         if st.button("🗺️ Mobil Analizi Haritaya İşle"):
             st.rerun()
 
-    # Mevcut tasarımdaki sesli komut demo kutusu korunur; analiz tetikleme MVP'de buton/kamera ile yapılır.
-    st.components.v1.html("""
-        <div style="background-color:#1E293B; padding:20px; border-radius:10px; color:white; font-family:sans-serif; margin-top:12px;">
-            <p>Sesli komut demo: "analiz et" komutu tarayıcıda algılanır. Streamlit MVP'de gerçek analiz, fotoğraf çekildikten sonra otomatik çalışır; ses komutu jüriye eller-serbest arayüz kabiliyeti olarak gösterilir.</p>
-            <button onclick="startDictation()" style="background:#7C3AED; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer;">🎙️ Sesli Komut Ver</button>
-            <p id="voiceResult" style="color:#38BDF8; margin-top:10px;"></p>
-        </div>
-        <script>
-            function startDictation() {
-                if (window.hasOwnProperty('webkitSpeechRecognition')) {
-                    var recognition = new webkitSpeechRecognition();
-                    recognition.continuous = false;
-                    recognition.interimResults = false;
-                    recognition.lang = "tr-TR";
-                    recognition.start();
-                    document.getElementById('voiceResult').innerText = "Dinleniyor...";
-                    recognition.onresult = function(e) {
-                        document.getElementById('voiceResult').innerText = "Anlaşılan Komut: " + e.results[0][0].transcript;
-                        recognition.stop();
-                    };
-                    recognition.onerror = function(e) {
-                        document.getElementById('voiceResult').innerText = "Hata: " + e.error;
-                        recognition.stop();
-                    }
-                } else {
-                    document.getElementById('voiceResult').innerText = "Tarayıcınız sesli komut desteklemiyor veya HTTPS izni yok.";
-                }
-            }
-        </script>
-    """, height=210)
+    # DOM kararlılığı için özel JavaScript ses bileşeni MVP sunumunda açıklama kutusuna dönüştürüldü.
+    st.markdown("""
+    <div style="background-color:#1E293B; padding:20px; border-radius:10px; color:white; font-family:sans-serif; margin-top:12px; border:1px solid #334155;">
+        <b>🎙️ Sesli Komut Demo Notu</b><br><br>
+        Mobil saha kullanımında hedef akış: <b>konum izni → kamera → çekim → analiz → rapor</b> adımlarını sesli yönlendirme ile tamamlamaktır.
+        Jüri MVP'sinde gerçek analiz fotoğraf çekildikten sonra otomatik çalışır; tam sesli komut tetikleme ikinci fazda özel bileşen/WebRTC ile geliştirilecektir.
+    </div>
+    """, unsafe_allow_html=True)
 
 if st.session_state.get("gorsel_kuyrugu"):
     st.markdown("### 📋 Anlık Analiz Tablosu")
@@ -1652,10 +1620,12 @@ if panel:
     </div>
     """, unsafe_allow_html=True)
 
-st.markdown(f"""
-<div class="footer-section">
+# Footer güvenli markdown ile render edilir; Streamlit Cloud'da ham HTML yazısı görünmesini ve DOM çakışmasını engeller.
+footer_html = f"""
+<div style="text-align:center; padding:25px; border-top:1px solid #334155; margin-top:30px; color:#94A3B8; font-family:Arial, sans-serif; background:#0F172A;">
     {kurumsal_footer_html()}
-    <br><br><b>GridAI MVP Platformu</b><br>
+    <br><br><b style="color:#E2E8F0;">GridAI MVP Platformu</b><br>
     <small>© 2026 GridAI Enterprise. Tüm hakları saklıdır.</small>
 </div>
-""", unsafe_allow_html=True)
+"""
+st.markdown(footer_html, unsafe_allow_html=True)
