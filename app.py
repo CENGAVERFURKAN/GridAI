@@ -1620,12 +1620,9 @@ if panel:
     </div>
     """, unsafe_allow_html=True)
 
-# Footer güvenli markdown ile render edilir; Streamlit Cloud'da ham HTML yazısı görünmesini ve DOM çakışmasını engeller.
-footer_html = f"""
-<div style="text-align:center; padding:25px; border-top:1px solid #334155; margin-top:30px; color:#94A3B8; font-family:Arial, sans-serif; background:#0F172A;">
-    {kurumsal_footer_html()}
-    <br><br><b style="color:#E2E8F0;">GridAI MVP Platformu</b><br>
-    <small>© 2026 GridAI Enterprise. Tüm hakları saklıdır.</small>
-</div>
-"""
-st.markdown(footer_html, unsafe_allow_html=True)
+# Footer tamamen Streamlit native bileşenlerle render edilir.
+# Böylece Cloud tarafında HTML kodu düz metin olarak görünmez ve React/DOM çakışması oluşmaz.
+st.markdown("---")
+st.markdown("### ⚡ GridAI")
+st.caption("Drone ve Mobil Görüntü Tabanlı Elektrik Hattı Analiz Platformu")
+st.caption("GridAI MVP Platformu · © 2026 GridAI Enterprise. Tüm hakları saklıdır.")
