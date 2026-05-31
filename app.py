@@ -138,6 +138,7 @@ if "cihaz_konum" not in st.session_state: st.session_state.cihaz_konum = None
 if "cihaz_konum_mesaj" not in st.session_state: st.session_state.cihaz_konum_mesaj = ""
 if "harita_merkez_override" not in st.session_state: st.session_state.harita_merkez_override = None
 if "son_konum_kaynagi" not in st.session_state: st.session_state.son_konum_kaynagi = ""
+if "manuel_koordinat" not in st.session_state: st.session_state.manuel_koordinat = None
 if "kurumsal_panel" not in st.session_state: st.session_state.kurumsal_panel = ""
 if "tespit_kutulari_goster" not in st.session_state: st.session_state.tespit_kutulari_goster = True
 if "canli_kamera_konum" not in st.session_state: st.session_state.canli_kamera_konum = None
@@ -623,6 +624,74 @@ def ai_detayini_guvenle_guncelle(ai_detay, veri_notu, analiz_kaynagi):
     return f"{ai_detay} Veri güvenilirliği: {veri_notu} Analiz kaynağı: {analiz_kaynagi}."
 
 
+def ariza_sinifi_katsayisi(anomali):
+    """Isı haritası ve risk hesabı için arıza sınıfına göre mühendislik ağırlığı."""
+    ad = str(anomali or "").lower()
+    if "izolat" in ad or "insulator" in ad:
+        return 0.95
+    if "gevş" in ad or "gevsek" in ad or "baglant" in ad or "connection" in ad:
+        return 0.88
+    if "vejet" in ad or "vegetation" in ad or "ağaç" in ad or "agac" in ad or "tree" in ad:
+        return 0.82
+    if "çatlak" in ad or "catlak" in ad or "crack" in ad:
+        return 0.80
+    if "korozy" in ad or "corrosion" in ad or "pas" in ad:
+        return 0.68
+    if "normal" in ad or "risk yok" in ad:
+        return 0.10
+    return 0.60
+
+
+def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
+    """
+    Risk = Roboflow tespit güveni + arıza sınıfı + çevresel koşullar + veri güvenilirliği.
+    Bu değer hem raporda hem de ısı haritası ağırlığında kullanılır.
+    """
+    try:
+        guven = float(guven or 0)
+    except Exception:
+        guven = 0
+    try:
+        veri_guven_puani = float(veri_guven_puani or 55)
+    except Exception:
+        veri_guven_puani = 55
+    hava = hava or {}
+    try:
+        ruzgar = float(hava.get("ruzgar", 0) or 0)
+        nem = float(hava.get("nem", 0) or 0)
+        sicaklik = float(hava.get("temp", 0) or 0)
+    except Exception:
+        ruzgar = nem = sicaklik = 0
+
+    sinif = ariza_sinifi_katsayisi(anomali) * 100
+    cevre = 0
+    if ruzgar >= 35: cevre += 14
+    elif ruzgar >= 20: cevre += 8
+    if nem >= 80: cevre += 7
+    elif nem >= 65: cevre += 4
+    if sicaklik >= 32: cevre += 6
+    if glint_var: cevre -= 5  # yansıma varsa veri kalitesi cezalandırılır
+
+    skor = (sinif * 0.42) + (guven * 0.33) + cevre + (veri_guven_puani * 0.12)
+    if "normal" in str(anomali or "").lower():
+        skor = min(skor, 28)
+    return round(max(5, min(99, skor)), 1)
+
+
+def heatmap_agirligi_hesapla(analiz):
+    """Isı haritasında sadece analiz noktalarını, risk ve veri güvenilirliğiyle ağırlıklandırır."""
+    try:
+        risk = float(analiz.get("risk_skoru", 0) or 0) / 100
+    except Exception:
+        risk = 0.20
+    try:
+        guven = float(analiz.get("veri_guven_puani", 55) or 55) / 100
+    except Exception:
+        guven = 0.55
+    katsayi = ariza_sinifi_katsayisi(analiz.get("anomali", ""))
+    return round(max(0.05, min(1.0, (risk * 0.60) + (katsayi * 0.25) + (guven * 0.15))), 3)
+
+
 def cevre_metrik_ai_yorumlari(vp):
     """PDF'deki çevresel metrik tablosu için değer odaklı AI yorumu üretir; tablo tasarımı korunur."""
     hava = vp.get("hava", {}) or {}
@@ -667,18 +736,12 @@ def cevre_metrik_ai_yorumlari(vp):
     }
 
 
-def tubitak_logo_html():
-    """Uzak görsel yüklenmese bile görünür kalan, SVG tabanlı TÜBİTAK rozeti."""
+def kurumsal_footer_html():
+    """TÜBİTAK logosu/ibaresi olmadan kurumsal footer alanı."""
     return """
-    <div style="display:inline-block; background:white; padding:10px 14px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
-      <svg width="96" height="106" viewBox="0 0 140 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TÜBİTAK logosu">
-        <polygon points="25,48 115,48 70,118" fill="#111111"/>
-        <circle cx="70" cy="38" r="28" fill="#E30613"/>
-        <circle cx="70" cy="38" r="38" fill="none" stroke="#E30613" stroke-width="5"/>
-        <circle cx="70" cy="38" r="48" fill="none" stroke="#E30613" stroke-width="5"/>
-        <circle cx="70" cy="62" r="26" fill="white"/>
-        <text x="70" y="143" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="800" fill="#111111">TÜBİTAK</text>
-      </svg>
+    <div style="display:inline-block; background:#1E293B; padding:14px 22px; border-radius:14px; border:1px solid #38BDF8; box-shadow:0 2px 8px rgba(0,0,0,0.25);">
+      <div style="font-size:22px; font-weight:800; color:#38BDF8; letter-spacing:0.5px;">⚡ GridAI</div>
+      <div style="font-size:12px; color:#CBD5E1; margin-top:4px;">Drone ve Mobil Görüntü Tabanlı Elektrik Hattı Analiz Platformu</div>
     </div>
     """
 
@@ -701,14 +764,17 @@ def gorsel_analiz_pipeline(dosya_adi, image_bytes, enlem, boylam, adres_detay, h
 
     yolo_sonuc = yolov11_analiz(img_pil, image_bytes=image_bytes, filename=dosya_adi, image_hash=hsh)
     glint_var, glint_oran = anti_glint_filtresi(img_pil)
-    mesafe, risk_skor = yolo_mesafe_risk_analizi(img_pil, hava.get("ruzgar", 0))
-    if yolo_sonuc and yolo_sonuc.get("anomali") != "Normal / Risk Yok":
-        risk_skor = max(risk_skor, min(98.5, 45 + (yolo_sonuc.get("guven", 0) * 0.45)))
-    if glint_var:
-        risk_skor = min(99.0, risk_skor + 5)
+    mesafe, _eski_mesafe_risk = yolo_mesafe_risk_analizi(img_pil, hava.get("ruzgar", 0))
 
     annotated = kutulari_ciz(img_pil, yolo_sonuc.get("predictions", []) if yolo_sonuc else [])
     veri_seviyesi, veri_puani, veri_notu = veri_guvenilirligi_hesapla(efektif_konum_kaynagi, analiz_kaynagi, gps_accuracy=gps_accuracy)
+    risk_skor = risk_skoru_hesapla(
+        yolo_sonuc.get("anomali", "Analiz yok") if yolo_sonuc else "Analiz yok",
+        yolo_sonuc.get("guven", 0) if yolo_sonuc else 0,
+        hava,
+        bool(glint_var),
+        veri_puani,
+    )
     temel_ai = ai_detayli_analiz_uret(yolo_sonuc.get("anomali", "Analiz yok") if yolo_sonuc else "Analiz yok", float(risk_skor), bool(glint_var), hava, yolo_sonuc.get("sicaklik", 0) if yolo_sonuc else 0)
     return {
         "dosya": dosya_adi,
@@ -1075,6 +1141,25 @@ with st.sidebar:
     input_il = st.text_input("İl", value="")
     input_ilce = st.text_input("İlçe", value="")
     input_cadde = st.text_input("Cadde/Mahalle", value="")
+    st.markdown("<small style='color:#94A3B8;'>EXIF olmayan görseller için koordinat girerek kesin saha konumu belirleyebilirsiniz.</small>", unsafe_allow_html=True)
+    ko1, ko2 = st.columns(2)
+    manuel_lat_txt = ko1.text_input("Enlem", value="", placeholder="41.002700", key="manuel_lat_txt")
+    manuel_lon_txt = ko2.text_input("Boylam", value="", placeholder="39.716800", key="manuel_lon_txt")
+    if st.button("📍 Koordinata Git / CBS'ye İşle", use_container_width=True):
+        try:
+            ml = float(str(manuel_lat_txt).replace(",", "."))
+            mn = float(str(manuel_lon_txt).replace(",", "."))
+            st.session_state.manuel_koordinat = {"lat": ml, "lon": mn}
+            st.session_state.harita_merkez_override = {
+                "lat": ml,
+                "lon": mn,
+                "adres": f"Manuel Koordinat Konumu ({ml:.6f}, {mn:.6f})",
+                "kaynak": "Manuel koordinat / operatör doğrulaması",
+            }
+            log_ekle("CBS", f"Manuel koordinat işlendi: {ml:.6f}, {mn:.6f}")
+            st.rerun()
+        except Exception:
+            st.error("Enlem ve boylam sayısal olmalı. Örnek: 41.002700 / 39.716800")
     cbs_coord_placeholder = st.empty()
     
     st.markdown("---")
@@ -1186,14 +1271,17 @@ folium.TileLayer("OpenStreetMap", name="Sokak Haritası").add_to(m)
 folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Uydu Görünümü').add_to(m)
 folium.TileLayer(tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr='OpenTopoMap', name='Topografik Harita').add_to(m)
 
-heat_points = [[enlem, boylam, 0.9], [enlem+0.002, boylam-0.001, 0.7]]
+heat_points = []
 for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
     try:
-        agirlik = min(1.0, max(0.15, float(a.get("risk_skoru", 20)) / 100))
+        agirlik = heatmap_agirligi_hesapla(a)
         heat_points.append([float(a.get("lat", enlem)), float(a.get("lon", boylam)), agirlik])
     except Exception:
         pass
-HeatMap(heat_points).add_to(m)
+if heat_points:
+    HeatMap(heat_points, name="Risk Ağırlıklı Isı Haritası", radius=22, blur=16, min_opacity=0.25).add_to(m)
+else:
+    st.caption("Isı haritası, analiz yapılan görsellerin risk skoru + arıza sınıfı + veri güvenilirliğiyle oluşturulur. Henüz analiz noktası olmadığı için ısı katmanı boş.")
 folium.Marker([enlem, boylam], popup=f"{adres_detay}", icon=folium.Icon(color="red", icon="bolt", prefix="fa")).add_to(m)
 
 for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
@@ -1204,7 +1292,8 @@ for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("so
         Tespit: {a.get('anomali','')}<br>
         Güven: %{a.get('guven',0)}<br>
         Risk: %{a.get('risk_skoru',0)}<br>
-        Konum Kaynağı: {a.get('konum_kaynagi','')}
+        Konum Kaynağı: {a.get('konum_kaynagi','')}<br>
+        Isı Ağırlığı: {heatmap_agirligi_hesapla(a)}
         """
         folium.CircleMarker(
             location=[float(a.get("lat", enlem)), float(a.get("lon", boylam))],
@@ -1241,7 +1330,7 @@ st.markdown("---")
 # ⚡ 10. YOLOv11 / ROBOFLOW & OPENCV & MOBİL ODA
 # ==========================================
 st.subheader("📸 Yapay Zeka Analiz Odası")
-st.caption("Not: Roboflow yalnızca eğitildiği/etiketlendiği sınıfları güvenilir tespit eder. Etiketlenmeyen nesne veya yetersiz örnekli sınıf tespit edilmeyebilir.")
+st.caption("Not: Roboflow yalnızca eğitildiği/etiketlendiği sınıfları güvenilir tespit eder. EXIF/GPS olmayan yüklenmiş görseller kesin saha konumu kabul edilmez; koordinat alanından manuel doğrulama yapılabilir.")
 secim = st.radio("Veri Girişi", ["Görsel Ekle", "Mobil Saha Terminali"], horizontal=True)
 
 b64_gorsel, yolo_durum, glint_durum, risk_puan = None, None, False, 0
@@ -1265,7 +1354,11 @@ if secim == "Görsel Ekle":
                 hsh = sha256_uret(raw)
                 if hsh in mevcut_hashler:
                     continue
-                analiz = gorsel_analiz_pipeline(up.name, raw, enlem, boylam, adres_detay, hava)
+                analiz = gorsel_analiz_pipeline(
+                    up.name, raw, enlem, boylam, adres_detay, hava,
+                    analiz_kaynagi="Yüklenen görsel",
+                    konum_kaynagi_override=("Manuel koordinat / operatör doğrulaması" if st.session_state.get("manuel_koordinat") or "Manuel" in str(st.session_state.get("son_konum_kaynagi", "")) else None),
+                )
                 st.session_state.gorsel_kuyrugu.append(analiz)
                 mevcut_hashler.add(hsh)
                 yeni_sayisi += 1
@@ -1555,14 +1648,14 @@ if panel:
     <div style="background-color:#1E293B; padding:20px; border-radius:10px; border:1px solid #38BDF8;">
         <h3 style="margin-top:0;">{baslik}</h3>
         {icerik}
-        <small style="color:#94A3B8;">GridAI, TÜBİTAK BİGG BiGG4FUTURE programı kapsamında elektrik şebekelerinin otonom takibi ve arıza tahmini için geliştirilmiş bir platformdur.</small>
+        <small style="color:#94A3B8;">GridAI, elektrik dağıtım şebekelerinde yapay zeka destekli görsel analiz ve CBS tabanlı karar destek amacıyla geliştirilmiş MVP platformudur.</small>
     </div>
     """, unsafe_allow_html=True)
 
 st.markdown(f"""
 <div class="footer-section">
-    {tubitak_logo_html()}
-    <br><br><b>TÜBİTAK desteği ile yapılmıştır.</b><br>
+    {kurumsal_footer_html()}
+    <br><br><b>GridAI MVP Platformu</b><br>
     <small>© 2026 GridAI Enterprise. Tüm hakları saklıdır.</small>
 </div>
 """, unsafe_allow_html=True)
