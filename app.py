@@ -191,30 +191,55 @@ def _secret_temizle(deger):
 
 
 def _supabase_url_temizle(deger):
-    """Supabase URL değerini güvenli normalize eder.
+    """Supabase Project URL değerini güvenli normalize eder.
 
-    Kabul edilen örnekler:
-    - https://xxxxx.supabase.co
-    - xxxxx.supabase.co
-    - Project URL: https://xxxxx.supabase.co
+    Doğru değer: https://xxxxx.supabase.co
+    Kullanıcı yanlışlıkla /rest/v1, dashboard linki veya etiketli metin yapıştırsa bile
+    mümkünse sadece proje ana URL'si alınır.
     """
     raw = _secret_temizle(deger)
     if not raw:
         return "", "SUPABASE_URL boş."
-    bulunan = re.search(r'https?://[^\s"\'<>]+', raw)
-    if bulunan:
-        raw = bulunan.group(0)
-    raw = raw.strip().rstrip("/")
-    if raw and not raw.startswith(("http://", "https://")) and ".supabase.co" in raw:
-        raw = "https://" + raw
-    parsed = urlparse(raw)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        return raw, "Geçersiz SUPABASE_URL. Project Settings > API > Project URL değerini tam olarak girin. Örnek: https://xxxxx.supabase.co"
-    return raw, "OK"
+
+    # Önce doğrudan proje ana URL'sini yakala.
+    m = re.search(r'https?://[a-zA-Z0-9-]+\.supabase\.co', raw)
+    if m:
+        return m.group(0).rstrip('/'), "OK"
+
+    # Şema yazılmadıysa ref.supabase.co bölümünü yakala.
+    m = re.search(r'([a-zA-Z0-9-]+\.supabase\.co)', raw)
+    if m:
+        return 'https://' + m.group(1).rstrip('/'), "OK"
+
+    return raw, "Geçersiz SUPABASE_URL. Sadece Project Settings > API > Project URL değerini girin. Örnek: https://xxxxx.supabase.co"
+
+
+def _supabase_table_temizle(deger):
+    """Tablo adını PostgREST path için güvenli hale getirir.
+
+    PGRST125 hatasının en sık sebebi tablo alanına public.gridai_analizler,
+    URL, boşluklu metin veya tırnaklı/etiketli değer yapıştırılmasıdır.
+    """
+    raw = _secret_temizle(deger or "gridai_analizler")
+    raw = raw.strip().strip('/').strip()
+    if not raw:
+        return "gridai_analizler"
+    # public.gridai_analizler yazıldıysa sadece tablo adını al.
+    if '.' in raw and '/' not in raw:
+        raw = raw.split('.')[-1]
+    # URL veya path yapıştırıldıysa son segmenti al.
+    if '/' in raw:
+        raw = raw.rstrip('/').split('/')[-1]
+    # URL query/fragment temizliği.
+    raw = raw.split('?')[0].split('#')[0]
+    # Güvenli karakterler dışındaysa varsayılana dön.
+    if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', raw):
+        return "gridai_analizler"
+    return raw
 
 
 def supabase_ayarlari():
-    """Supabase ortak kayıt sistemini Secrets/ortam değişkenlerinden okur ve URL'yi düzeltir."""
+    """Supabase ortak kayıt sistemini Secrets/ortam değişkenlerinden okur."""
     raw_url = _secret_get("SUPABASE_URL", "").strip() or _secret_get("SUPABASE_PROJECT_URL", "").strip()
     url, url_msg = _supabase_url_temizle(raw_url)
     key = (
@@ -223,7 +248,7 @@ def supabase_ayarlari():
         or _secret_get("SUPABASE_ANON_KEY", "").strip()
     )
     key = _secret_temizle(key)
-    table = _secret_temizle(_secret_get("SUPABASE_TABLE", "gridai_analizler")) or "gridai_analizler"
+    table = _supabase_table_temizle(_secret_get("SUPABASE_TABLE", "gridai_analizler"))
     url_gecerli = (url_msg == "OK")
     return {
         "url": url,
@@ -231,12 +256,28 @@ def supabase_ayarlari():
         "table": table,
         "url_gecerli": url_gecerli,
         "url_msg": url_msg,
-        "aktif": bool(url_gecerli and key and create_client is not None),
+        "aktif": bool(url_gecerli and key),
     }
+
+
+def _supabase_headers(key, prefer=None):
+    h = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        h["Prefer"] = prefer
+    return h
+
+
+def _supabase_rest_url(ayar):
+    return f"{ayar['url'].rstrip('/')}/rest/v1/{ayar['table']}"
 
 
 @st.cache_resource(show_spinner=False)
 def supabase_client_olustur(url, key):
+    # Geriye dönük uyumluluk için bırakıldı; ana akış REST API kullanır.
     if create_client is None:
         return None
     return create_client(url, key)
@@ -248,13 +289,26 @@ def supabase_client_getir():
         return None, ayar, ayar.get("url_msg", "Supabase URL geçersiz.")
     if not ayar.get("key"):
         return None, ayar, "Supabase key eksik. Secrets içine SUPABASE_SERVICE_ROLE_KEY ekleyin."
-    if create_client is None:
-        return None, ayar, "supabase paketi yüklenemedi. requirements.txt içinde supabase olmalı."
-    try:
-        return supabase_client_olustur(ayar["url"], ayar["key"]), ayar, "Supabase bağlı."
-    except Exception as e:
-        return None, ayar, f"Supabase istemcisi oluşturulamadı: {e}"
+    return True, ayar, "Supabase REST bağlantısı hazır."
 
+
+def supabase_baglanti_testi():
+    """Kısa bağlantı testi. Hata mesajını kullanıcıya sade gösterir."""
+    _, ayar, msg = supabase_client_getir()
+    if not ayar.get("aktif"):
+        return False, msg
+    try:
+        r = requests.get(
+            _supabase_rest_url(ayar),
+            headers=_supabase_headers(ayar["key"]),
+            params={"select":"id", "limit":"1"},
+            timeout=8,
+        )
+        if r.status_code < 300:
+            return True, "Supabase bağlantısı doğrulandı."
+        return False, f"Supabase test hatası: HTTP {r.status_code} - {r.text[:240]}"
+    except Exception as e:
+        return False, f"Supabase test hatası: {e}"
 
 def _num_or_none(v):
     try:
@@ -304,35 +358,45 @@ def supabase_satir_hazirla(analiz, vp, kullanici_adi, cihaz_turu="Web Panel"):
 
 
 def supabase_analizleri_kaydet(analizler, vp, kullanici_adi, cihaz_turu="Web Panel"):
-    """Analizleri ortak Supabase veritabanına kaydeder. Hata olursa uygulamayı düşürmez."""
+    """Analizleri ortak Supabase veritabanına REST API ile kaydeder."""
     if not analizler:
         return False, "Supabase'e kaydedilecek analiz yok."
-    client, ayar, msg = supabase_client_getir()
-    if client is None:
+    _, ayar, msg = supabase_client_getir()
+    if not ayar.get("aktif"):
         return False, msg
     try:
         satirlar = [supabase_satir_hazirla(a, vp, kullanici_adi, cihaz_turu) for a in analizler]
-        # Aynı hash tekrar kaydedilse bile jüri demosunda sorun çıkarmasın diye insert basit tutuldu.
-        res = client.table(ayar["table"]).insert(satirlar).execute()
-        return True, f"{len(satirlar)} analiz Supabase ortak veritabanına kaydedildi."
+        r = requests.post(
+            _supabase_rest_url(ayar),
+            headers=_supabase_headers(ayar["key"], prefer="return=minimal"),
+            data=json.dumps(satirlar, ensure_ascii=False),
+            timeout=12,
+        )
+        if r.status_code in (200, 201, 204):
+            return True, f"{len(satirlar)} analiz Supabase ortak veritabanına kaydedildi."
+        return False, f"Supabase kayıt hatası: HTTP {r.status_code} - {r.text[:400]}"
     except Exception as e:
         return False, f"Supabase kayıt hatası: {e}"
 
 
 @st.cache_data(ttl=10, show_spinner=False)
 def supabase_analizleri_getir(limit=50):
-    """Son saha analizlerini Supabase'den okur. 10 sn cache ile Cloud performansını korur."""
+    """Son saha analizlerini Supabase REST API ile okur."""
     ayar = supabase_ayarlari()
     if not ayar.get("url_gecerli"):
         return [], ayar.get("url_msg", "Supabase URL geçersiz.")
     if not ayar.get("key"):
         return [], "Supabase key eksik. Secrets içine SUPABASE_SERVICE_ROLE_KEY ekleyin."
-    if create_client is None:
-        return [], "supabase paketi requirements.txt içinde yok veya yüklenemedi."
     try:
-        client = supabase_client_olustur(ayar["url"], ayar["key"])
-        res = client.table(ayar["table"]).select("*").order("created_at", desc=True).limit(int(limit)).execute()
-        return (res.data or []), "Supabase kayıtları okundu."
+        r = requests.get(
+            _supabase_rest_url(ayar),
+            headers=_supabase_headers(ayar["key"]),
+            params={"select":"*", "order":"created_at.desc", "limit":str(int(limit))},
+            timeout=12,
+        )
+        if r.status_code in (200, 206):
+            return (r.json() or []), "Supabase kayıtları okundu."
+        return [], f"Supabase okuma hatası: HTTP {r.status_code} - {r.text[:400]}"
     except Exception as e:
         return [], f"Supabase okuma hatası: {e}"
 
@@ -902,53 +966,72 @@ def cevre_metrik_ai_yorumlari(vp):
 
 
 def sesli_komut_bileseni():
-    """Mobil tarayıcıda sesli komut/yönlendirme demosu.
+    """Mobilde kararlı çalışan sesli yönlendirme paneli.
 
-    Bu bileşen Python state'i doğrudan değiştirmez; Streamlit'in kararlılığını bozmayacak
-    şekilde ayrı iframe içinde çalışır. Kamera analizi st.camera_input ile yapılmaya devam eder.
+    Streamlit Cloud içinde mikrofon erişimi iframe/izin politikası nedeniyle bazı
+    telefonlarda çalışmayabilir. Bu yüzden varsayılan mod native Streamlit adım
+    panelidir; deneysel mikrofon modu ayrıca açılır.
     """
-    html = """
-    <div style="background:#1E293B; color:#E2E8F0; border:1px solid #38BDF8; border-radius:12px; padding:16px; font-family:Arial, sans-serif;">
-      <div style="font-size:18px; font-weight:800; color:#38BDF8; margin-bottom:8px;">🎙️ Sesli Komut Asistanı</div>
-      <div style="font-size:13px; color:#CBD5E1; margin-bottom:10px;">Telefon/tablet üzerinde butona basıp şu komutları deneyin: <b>konum al</b>, <b>kamera aç</b>, <b>çekim yap</b>, <b>analiz et</b>, <b>rapor oluştur</b>.</div>
-      <button id="startVoice" style="background:#0F766E; color:white; border:0; border-radius:8px; padding:10px 14px; font-weight:700; width:100%;">🎙️ Sesli Komutu Başlat</button>
-      <div id="voiceStatus" style="margin-top:12px; background:#0F172A; border:1px solid #334155; border-radius:8px; padding:10px; min-height:48px; font-size:13px;">Hazır. Mikrofon izni istenirse izin verin.</div>
-      <ol style="font-size:13px; line-height:1.55; margin-top:12px; color:#CBD5E1; padding-left:20px;">
-        <li><b>Konum al:</b> tarayıcı konum iznini kontrol edin.</li>
-        <li><b>Kamera aç / çekim yap:</b> aşağıdaki kamera kutusundan fotoğraf çekin.</li>
-        <li><b>Analiz et:</b> fotoğraf çekildiğinde Roboflow analizi otomatik başlar.</li>
-        <li><b>Rapor oluştur:</b> analizden sonra PDF/SAP Excel alanını kullanın.</li>
-      </ol>
-    </div>
-    <script>
-    (function(){
-      const btn = document.getElementById('startVoice');
-      const out = document.getElementById('voiceStatus');
-      function speak(t){ try { const u = new SpeechSynthesisUtterance(t); u.lang='tr-TR'; window.speechSynthesis.speak(u); } catch(e){} }
-      function setMsg(t){ out.innerHTML = t; speak(t.replace(/<[^>]*>/g,'')); }
-      btn.onclick = function(){
-        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-        if(!SR){ setMsg('Bu mobil tarayıcı ses tanımayı desteklemiyor. Chrome veya Safari ile deneyin.'); return; }
-        const rec = new SR();
-        rec.lang = 'tr-TR'; rec.continuous = false; rec.interimResults = false;
-        out.innerHTML = 'Dinleniyor... Komut söyleyin.';
-        rec.onresult = function(e){
-          const text = (e.results[0][0].transcript || '').toLowerCase();
-          let yanit = '<b>Anlaşılan komut:</b> ' + text + '<br>';
-          if(text.includes('konum')) yanit += 'Adım: Konum izni verin; sistem canlı çekim koordinatını analiz kaydına ekler.';
-          else if(text.includes('kamera') || text.includes('çek')) yanit += 'Adım: Aşağıdaki kamera alanından fotoğraf çekin. Fotoğraf çekilince analiz otomatik başlar.';
-          else if(text.includes('analiz')) yanit += 'Adım: Çekilen görsel Roboflow/YOLO modeline gönderilir; tespit kutuları, risk skoru ve konum kaydı oluşturulur.';
-          else if(text.includes('rapor')) yanit += 'Adım: Raporlama alanından PDF ve SAP PM Excel çıktısını indirin.';
-          else yanit += 'Desteklenen komutlar: konum al, kamera aç, çekim yap, analiz et, rapor oluştur.';
-          setMsg(yanit);
-        };
-        rec.onerror = function(e){ setMsg('Sesli komut hatası: ' + (e.error || 'bilinmeyen hata') + '. Mikrofon iznini kontrol edin.'); };
-        rec.start();
-      };
-    })();
-    </script>
-    """
-    components.html(html, height=285, scrolling=False)
+    st.markdown("#### 🎙️ Mobil Sesli Komut / Saha Yönlendirme")
+    st.info("Telefon tarayıcılarında gerçek mikrofon komutu her cihazda kararlı değildir. Aşağıdaki adımlar saha personelini aynı akışa yönlendirir; deneysel mikrofon modu istersen ayrıca açılabilir.")
+
+    adim1, adim2, adim3, adim4 = st.columns(4)
+    with adim1:
+        st.markdown("""
+        <div class='metric-box'><small>1. Komut</small><h3>📍 Konum Al</h3><p style='font-size:12px;'>Konum izni verilir, GPS analiz kaydına işlenir.</p></div>
+        """, unsafe_allow_html=True)
+    with adim2:
+        st.markdown("""
+        <div class='metric-box'><small>2. Komut</small><h3>📷 Kamera Aç</h3><p style='font-size:12px;'>Aşağıdaki kamera alanından fotoğraf çekilir.</p></div>
+        """, unsafe_allow_html=True)
+    with adim3:
+        st.markdown("""
+        <div class='metric-box'><small>3. Komut</small><h3>🤖 Analiz Et</h3><p style='font-size:12px;'>Görsel Roboflow/YOLO ile analiz edilir.</p></div>
+        """, unsafe_allow_html=True)
+    with adim4:
+        st.markdown("""
+        <div class='metric-box'><small>4. Komut</small><h3>📄 Raporla</h3><p style='font-size:12px;'>PDF/SAP Excel ve Supabase kaydı oluşturulur.</p></div>
+        """, unsafe_allow_html=True)
+
+    st.caption("Desteklenen komut akışı: konum al → kamera aç → çekim yap → analiz et → rapor oluştur.")
+
+    if st.checkbox("Deneysel mikrofon komutunu göster", value=False, help="Bazı mobil tarayıcılarda iframe izinleri nedeniyle çalışmayabilir. Çalışmazsa yukarıdaki adım paneli kullanılmalıdır."):
+        html = """
+        <div style="background:#1E293B; color:#E2E8F0; border:1px solid #38BDF8; border-radius:12px; padding:16px; font-family:Arial, sans-serif;">
+          <div style="font-size:18px; font-weight:800; color:#38BDF8; margin-bottom:8px;">🎙️ Deneysel Mikrofon Testi</div>
+          <button id="startVoice" style="background:#0F766E; color:white; border:0; border-radius:8px; padding:12px 14px; font-weight:700; width:100%;">Mikrofonu Dene</button>
+          <div id="voiceStatus" style="margin-top:12px; background:#0F172A; border:1px solid #334155; border-radius:8px; padding:10px; min-height:70px; font-size:13px;">Hazır. Komutlar: konum al, kamera aç, analiz et, rapor oluştur.</div>
+        </div>
+        <script>
+        (function(){
+          const btn = document.getElementById('startVoice');
+          const out = document.getElementById('voiceStatus');
+          function msg(t){ out.innerHTML = t; }
+          btn.onclick = function(){
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if(!SR){ msg('Bu tarayıcı ses tanımayı desteklemiyor. Mobil Chrome/Safari ile deneyin.'); return; }
+            try{
+              const rec = new SR();
+              rec.lang='tr-TR'; rec.continuous=false; rec.interimResults=false;
+              msg('Dinleniyor...');
+              rec.onresult = function(e){
+                const text = (e.results[0][0].transcript || '').toLowerCase();
+                let yanit = '<b>Anlaşılan:</b> ' + text + '<br>';
+                if(text.includes('konum')) yanit += 'Yönlendirme: konum izni verin ve canlı GPS kaydı alın.';
+                else if(text.includes('kamera') || text.includes('çek')) yanit += 'Yönlendirme: aşağıdaki kamera alanından fotoğraf çekin.';
+                else if(text.includes('analiz')) yanit += 'Yönlendirme: fotoğraf çekilince Roboflow analizi otomatik başlar.';
+                else if(text.includes('rapor')) yanit += 'Yönlendirme: PDF/SAP Excel alanından çıktı alın.';
+                else yanit += 'Desteklenen komutlar: konum al, kamera aç, analiz et, rapor oluştur.';
+                msg(yanit);
+              };
+              rec.onerror = function(e){ msg('Mikrofon bu cihaz/tarayıcı içinde engellendi veya desteklenmedi. Adım panelini kullanın. Teknik hata: ' + (e.error || 'bilinmiyor')); };
+              rec.start();
+            }catch(err){ msg('Mikrofon başlatılamadı. Adım panelini kullanın.'); }
+          };
+        })();
+        </script>
+        """
+        components.html(html, height=270, scrolling=True)
 
 
 def kurumsal_footer_html():
