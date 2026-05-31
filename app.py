@@ -7,6 +7,8 @@ import random
 import base64
 import math
 import hashlib
+import re
+from urllib.parse import urlparse
 from pathlib import Path
 from datetime import datetime, timedelta
 import cv2
@@ -17,6 +19,7 @@ from PIL import Image, ImageDraw, ExifTags
 import folium
 from folium.plugins import HeatMap
 from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
@@ -176,12 +179,60 @@ def _secret_get(anahtar, varsayilan=""):
 
 
 
+def _secret_temizle(deger):
+    """Secrets içine yanlışlıkla etiketle birlikte yapıştırılan değerleri sadeleştirir."""
+    if deger is None:
+        return ""
+    txt = str(deger).strip()
+    if "=" in txt and not txt.startswith("http"):
+        txt = txt.split("=", 1)[-1].strip()
+    txt = txt.strip().strip('"').strip("'").strip()
+    return txt
+
+
+def _supabase_url_temizle(deger):
+    """Supabase URL değerini güvenli normalize eder.
+
+    Kabul edilen örnekler:
+    - https://xxxxx.supabase.co
+    - xxxxx.supabase.co
+    - Project URL: https://xxxxx.supabase.co
+    """
+    raw = _secret_temizle(deger)
+    if not raw:
+        return "", "SUPABASE_URL boş."
+    bulunan = re.search(r'https?://[^\s"\'<>]+', raw)
+    if bulunan:
+        raw = bulunan.group(0)
+    raw = raw.strip().rstrip("/")
+    if raw and not raw.startswith(("http://", "https://")) and ".supabase.co" in raw:
+        raw = "https://" + raw
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return raw, "Geçersiz SUPABASE_URL. Project Settings > API > Project URL değerini tam olarak girin. Örnek: https://xxxxx.supabase.co"
+    return raw, "OK"
+
+
 def supabase_ayarlari():
-    """Supabase ortak kayıt sistemini Secrets/ortam değişkenlerinden okur."""
-    url = _secret_get("SUPABASE_URL", "").strip()
-    key = _secret_get("SUPABASE_SERVICE_ROLE_KEY", "").strip() or _secret_get("SUPABASE_KEY", "").strip()
-    table = _secret_get("SUPABASE_TABLE", "gridai_analizler").strip() or "gridai_analizler"
-    return {"url": url, "key": key, "table": table, "aktif": bool(url and key and create_client is not None)}
+    """Supabase ortak kayıt sistemini Secrets/ortam değişkenlerinden okur ve URL'yi düzeltir."""
+    raw_url = _secret_get("SUPABASE_URL", "").strip() or _secret_get("SUPABASE_PROJECT_URL", "").strip()
+    url, url_msg = _supabase_url_temizle(raw_url)
+    key = (
+        _secret_get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+        or _secret_get("SUPABASE_KEY", "").strip()
+        or _secret_get("SUPABASE_ANON_KEY", "").strip()
+    )
+    key = _secret_temizle(key)
+    table = _secret_temizle(_secret_get("SUPABASE_TABLE", "gridai_analizler")) or "gridai_analizler"
+    url_gecerli = (url_msg == "OK")
+    return {
+        "url": url,
+        "key": key,
+        "table": table,
+        "url_gecerli": url_gecerli,
+        "url_msg": url_msg,
+        "aktif": bool(url_gecerli and key and create_client is not None),
+    }
 
 
 @st.cache_resource(show_spinner=False)
@@ -193,8 +244,12 @@ def supabase_client_olustur(url, key):
 
 def supabase_client_getir():
     ayar = supabase_ayarlari()
-    if not ayar["aktif"]:
-        return None, ayar, "Supabase aktif değil veya paket/secret eksik."
+    if not ayar.get("url_gecerli"):
+        return None, ayar, ayar.get("url_msg", "Supabase URL geçersiz.")
+    if not ayar.get("key"):
+        return None, ayar, "Supabase key eksik. Secrets içine SUPABASE_SERVICE_ROLE_KEY ekleyin."
+    if create_client is None:
+        return None, ayar, "supabase paketi yüklenemedi. requirements.txt içinde supabase olmalı."
     try:
         return supabase_client_olustur(ayar["url"], ayar["key"]), ayar, "Supabase bağlı."
     except Exception as e:
@@ -268,8 +323,10 @@ def supabase_analizleri_kaydet(analizler, vp, kullanici_adi, cihaz_turu="Web Pan
 def supabase_analizleri_getir(limit=50):
     """Son saha analizlerini Supabase'den okur. 10 sn cache ile Cloud performansını korur."""
     ayar = supabase_ayarlari()
-    if not ayar["aktif"]:
-        return [], "Supabase aktif değil."
+    if not ayar.get("url_gecerli"):
+        return [], ayar.get("url_msg", "Supabase URL geçersiz.")
+    if not ayar.get("key"):
+        return [], "Supabase key eksik. Secrets içine SUPABASE_SERVICE_ROLE_KEY ekleyin."
     if create_client is None:
         return [], "supabase paketi requirements.txt içinde yok veya yüklenemedi."
     try:
@@ -844,6 +901,56 @@ def cevre_metrik_ai_yorumlari(vp):
     }
 
 
+def sesli_komut_bileseni():
+    """Mobil tarayıcıda sesli komut/yönlendirme demosu.
+
+    Bu bileşen Python state'i doğrudan değiştirmez; Streamlit'in kararlılığını bozmayacak
+    şekilde ayrı iframe içinde çalışır. Kamera analizi st.camera_input ile yapılmaya devam eder.
+    """
+    html = """
+    <div style="background:#1E293B; color:#E2E8F0; border:1px solid #38BDF8; border-radius:12px; padding:16px; font-family:Arial, sans-serif;">
+      <div style="font-size:18px; font-weight:800; color:#38BDF8; margin-bottom:8px;">🎙️ Sesli Komut Asistanı</div>
+      <div style="font-size:13px; color:#CBD5E1; margin-bottom:10px;">Telefon/tablet üzerinde butona basıp şu komutları deneyin: <b>konum al</b>, <b>kamera aç</b>, <b>çekim yap</b>, <b>analiz et</b>, <b>rapor oluştur</b>.</div>
+      <button id="startVoice" style="background:#0F766E; color:white; border:0; border-radius:8px; padding:10px 14px; font-weight:700; width:100%;">🎙️ Sesli Komutu Başlat</button>
+      <div id="voiceStatus" style="margin-top:12px; background:#0F172A; border:1px solid #334155; border-radius:8px; padding:10px; min-height:48px; font-size:13px;">Hazır. Mikrofon izni istenirse izin verin.</div>
+      <ol style="font-size:13px; line-height:1.55; margin-top:12px; color:#CBD5E1; padding-left:20px;">
+        <li><b>Konum al:</b> tarayıcı konum iznini kontrol edin.</li>
+        <li><b>Kamera aç / çekim yap:</b> aşağıdaki kamera kutusundan fotoğraf çekin.</li>
+        <li><b>Analiz et:</b> fotoğraf çekildiğinde Roboflow analizi otomatik başlar.</li>
+        <li><b>Rapor oluştur:</b> analizden sonra PDF/SAP Excel alanını kullanın.</li>
+      </ol>
+    </div>
+    <script>
+    (function(){
+      const btn = document.getElementById('startVoice');
+      const out = document.getElementById('voiceStatus');
+      function speak(t){ try { const u = new SpeechSynthesisUtterance(t); u.lang='tr-TR'; window.speechSynthesis.speak(u); } catch(e){} }
+      function setMsg(t){ out.innerHTML = t; speak(t.replace(/<[^>]*>/g,'')); }
+      btn.onclick = function(){
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if(!SR){ setMsg('Bu mobil tarayıcı ses tanımayı desteklemiyor. Chrome veya Safari ile deneyin.'); return; }
+        const rec = new SR();
+        rec.lang = 'tr-TR'; rec.continuous = false; rec.interimResults = false;
+        out.innerHTML = 'Dinleniyor... Komut söyleyin.';
+        rec.onresult = function(e){
+          const text = (e.results[0][0].transcript || '').toLowerCase();
+          let yanit = '<b>Anlaşılan komut:</b> ' + text + '<br>';
+          if(text.includes('konum')) yanit += 'Adım: Konum izni verin; sistem canlı çekim koordinatını analiz kaydına ekler.';
+          else if(text.includes('kamera') || text.includes('çek')) yanit += 'Adım: Aşağıdaki kamera alanından fotoğraf çekin. Fotoğraf çekilince analiz otomatik başlar.';
+          else if(text.includes('analiz')) yanit += 'Adım: Çekilen görsel Roboflow/YOLO modeline gönderilir; tespit kutuları, risk skoru ve konum kaydı oluşturulur.';
+          else if(text.includes('rapor')) yanit += 'Adım: Raporlama alanından PDF ve SAP PM Excel çıktısını indirin.';
+          else yanit += 'Desteklenen komutlar: konum al, kamera aç, çekim yap, analiz et, rapor oluştur.';
+          setMsg(yanit);
+        };
+        rec.onerror = function(e){ setMsg('Sesli komut hatası: ' + (e.error || 'bilinmeyen hata') + '. Mikrofon iznini kontrol edin.'); };
+        rec.start();
+      };
+    })();
+    </script>
+    """
+    components.html(html, height=285, scrolling=False)
+
+
 def kurumsal_footer_html():
     """TÜBİTAK logosu/ibaresi olmadan kurumsal footer alanı."""
     return """
@@ -1378,6 +1485,41 @@ st.title("⚡ GridAI Drone ve Yapay Zeka Tabanlı Elektrik Hattı Görüntü Ana
 st.markdown(f"**Saha Kodu:** `{token}` | **Lokasyon:** {adres_detay}")
 st.caption(f"Konum kaynağı: {st.session_state.get('son_konum_kaynagi', '')}")
 
+with st.expander("📱 Mobil Hızlı Panel / Sidebar görünmüyorsa burayı kullan", expanded=False):
+    st.caption("Telefonlarda sidebar genelde gizli menüye alınır. Saha personeli bu panelden kullanıcı ve koordinat bilgisini hızlı girebilir.")
+    mob1, mob2 = st.columns([1, 1])
+    with mob1:
+        mobil_ad = st.text_input("Mobil kullanıcı adı", value=st.session_state.get("kullanici_adi", "Saha Kullanıcısı"), key="mobil_kullanici_adi_input")
+        if st.button("👤 Kullanıcı Adını Uygula", key="mobil_kullanici_adi_btn", use_container_width=True):
+            st.session_state.kullanici_adi = mobil_ad or "Saha Kullanıcısı"
+            st.success("Kullanıcı adı güncellendi.")
+            st.rerun()
+    with mob2:
+        sb_ayar_mobil = supabase_ayarlari()
+        if sb_ayar_mobil.get("aktif"):
+            st.success("Supabase bağlı: telefon ve web ortak kayıt kullanır.")
+        else:
+            st.warning(f"Supabase pasif: {sb_ayar_mobil.get('url_msg','Secret/key kontrol edin.')}")
+    km1, km2 = st.columns(2)
+    mobil_lat = km1.text_input("Mobil/manuel enlem", value="", placeholder="41.002700", key="mobil_lat_input")
+    mobil_lon = km2.text_input("Mobil/manuel boylam", value="", placeholder="39.716800", key="mobil_lon_input")
+    if st.button("📍 Mobil Koordinatı Haritaya ve Analize İşle", key="mobil_koord_btn", use_container_width=True):
+        try:
+            ml = float(str(mobil_lat).replace(",", "."))
+            mn = float(str(mobil_lon).replace(",", "."))
+            st.session_state.manuel_koordinat = {"lat": ml, "lon": mn}
+            st.session_state.harita_merkez_override = {
+                "lat": ml,
+                "lon": mn,
+                "adres": f"Mobil/Manuel Koordinat Konumu ({ml:.6f}, {mn:.6f})",
+                "kaynak": "Mobil hızlı panel / operatör doğrulaması",
+            }
+            log_ekle("MOBIL_CBS", f"Mobil panelden koordinat işlendi: {ml:.6f}, {mn:.6f}")
+            st.rerun()
+        except Exception:
+            st.error("Enlem ve boylam sayısal olmalı. Örnek: 41.002700 / 39.716800")
+    st.info("Mobil çekimde en güvenilir akış: konum izni ver → kamera ile çek → analiz et → arşive kaydet. EXIF yoksa bu koordinat/cihaz GPS'i kullanılır.")
+
 c1, c2, c3, c4 = st.columns(4)
 c1.markdown(f"<div class='metric-box'><small>🔥 Sıcaklık / Nem</small><h3>{hava['temp']} °C / %{hava['nem']}</h3></div>", unsafe_allow_html=True)
 c2.markdown(f"<div class='metric-box'><small>⚡ Tahmini Hat Akımı</small><h3>{tahmini_hat_akimi} A</h3></div>", unsafe_allow_html=True)
@@ -1661,14 +1803,8 @@ else:
         if st.button("🗺️ Mobil Analizi Haritaya İşle"):
             st.rerun()
 
-    # DOM kararlılığı için özel JavaScript ses bileşeni MVP sunumunda açıklama kutusuna dönüştürüldü.
-    st.markdown("""
-    <div style="background-color:#1E293B; padding:20px; border-radius:10px; color:white; font-family:sans-serif; margin-top:12px; border:1px solid #334155;">
-        <b>🎙️ Sesli Komut Demo Notu</b><br><br>
-        Mobil saha kullanımında hedef akış: <b>konum izni → kamera → çekim → analiz → rapor</b> adımlarını sesli yönlendirme ile tamamlamaktır.
-        Jüri MVP'sinde gerçek analiz fotoğraf çekildikten sonra otomatik çalışır; tam sesli komut tetikleme ikinci fazda özel bileşen/WebRTC ile geliştirilecektir.
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("#### 🎙️ Sesli Komut ve Mobil Yönlendirme")
+    sesli_komut_bileseni()
 
 if st.session_state.get("gorsel_kuyrugu"):
     st.markdown("### 📋 Anlık Analiz Tablosu")
