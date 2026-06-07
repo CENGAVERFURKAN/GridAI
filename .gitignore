@@ -1,2 +1,5 @@
 .streamlit/secrets.toml
 .DS_Store
+.streamlit/
+Roboto-Regular.ttf
+Roboto-Bold.ttf
