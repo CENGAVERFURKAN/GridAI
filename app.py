@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 import cv2
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageDraw, ExifTags
+from PIL import Image, ImageDraw, ExifTags, ImageFont
 
 import folium
 from folium.plugins import HeatMap
@@ -68,6 +68,17 @@ st.markdown("""
     .weather-card .temp {color:#F8FAFC !important; font-weight:800;}
     .muted-safe {color:#CBD5E1 !important;}
     h1, h2, h3 {color:#0284C7 !important;}
+
+    /* GridAI sabit okunabilirlik: açık/koyu sistem temasından bağımsız */
+    [data-testid="stSidebar"] {background-color:#0F172A !important;}
+    [data-testid="stSidebar"] label, [data-testid="stSidebar"] p, [data-testid="stSidebar"] span, [data-testid="stSidebar"] small {color:#E2E8F0 !important;}
+    [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea {background:#F8FAFC !important; color:#0F172A !important; border:1px solid #38BDF8 !important;}
+    [data-testid="stSidebar"] input::placeholder, [data-testid="stSidebar"] textarea::placeholder {color:#64748B !important;}
+    .stTextInput label, .stNumberInput label, .stTextArea label, .stSelectbox label {font-weight:700 !important;}
+    .gridai-note {background:#E0F2FE; color:#0F172A; border:1px solid #0284C7; border-radius:10px; padding:10px;}
+    .voice-box {background:#F8FAFC; color:#0F172A; border:1px solid #0284C7; border-radius:12px; padding:12px; margin-bottom:10px;}
+    .voice-box b, .voice-box strong {color:#0F172A !important;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -883,18 +894,59 @@ def exif_tarih_konum_oku(image_bytes):
     return sonuc
 
 
-def _etiket_rengi(label):
+def _tespit_hasarli_mi(label):
     l = str(label or "").lower()
-    if "izolat" in l: return (0, 168, 255)
-    if "ağaç" in l or "agac" in l or "veget" in l or "vejet" in l or "tree" in l: return (34, 197, 94)
-    if "direk" in l or "pole" in l: return (245, 158, 11)
-    if "koro" in l or "pas" in l: return (239, 68, 68)
-    if "bağ" in l or "bag" in l or "connection" in l: return (168, 85, 247)
-    return (0, 168, 255)
+    sorun_kelimeleri = ["kır", "kir", "çatlak", "catlak", "hasar", "arıza", "ariza", "koro", "pas", "gevş", "gevsek", "kopuk", "yanık", "yanik", "risk", "alarm", "kritik", "kaçak", "kacak"]
+    if any(k in l for k in sorun_kelimeleri):
+        return True
+    return False
 
+
+def _yardimci_sahne_mi(p):
+    return bool(p.get("yardimci")) or "adayı" in str(p.get("class", "")).lower() or "adayi" in str(p.get("class", "")).lower()
+
+
+def _etiket_rengi(label, yardimci=False):
+    l = str(label or "").lower()
+    if _tespit_hasarli_mi(label):
+        return (220, 38, 38)       # hasarlı/sorunlu: kırmızı
+    if "vejet" in l or "ağaç" in l or "agac" in l or "tree" in l or "veget" in l:
+        return (245, 158, 11)     # yaklaşım/vejetasyon: turuncu
+    if "izolat" in l or "insulator" in l:
+        return (2, 132, 199)      # ekipman/sahne: mavi
+    if "direk" in l or "pole" in l or "iletken" in l or "hat" in l:
+        return (14, 165, 233)
+    if yardimci:
+        return (34, 197, 94)      # yardımcı sahne: yeşil
+    return (2, 132, 199)
+
+
+def _kutu_etiket_metni(p):
+    label = str(p.get('class', 'Tespit'))
+    conf = float(p.get('confidence', 0) or 0)
+    if _yardimci_sahne_mi(p):
+        return f"SAHNE: {label} %{conf:.0f}"
+    if _tespit_hasarli_mi(label):
+        return f"SORUNLU: {label} %{conf:.0f}"
+    return f"TESPİT: {label} %{conf:.0f}"
+
+
+def _font_yukle_gorsel(font_size):
+    adaylar = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "Roboto-Bold.ttf",
+        "/Library/Fonts/Arial Unicode.ttf",
+    ]
+    for a in adaylar:
+        try:
+            if os.path.exists(a):
+                return ImageFont.truetype(a, font_size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
 def kutulari_ciz(image_pil, predictions):
-    """Roboflow object detection ve GridAI yardımcı sahne işaretlerini belirgin kutu + etiket ile çizer."""
+    """Roboflow object detection ve GridAI yardımcı sahne işaretlerini belirgin kutu + okunur etiket ile çizer."""
     img = image_pil.copy().convert("RGB")
     if not st.session_state.get("tespit_kutulari_goster", True):
         return img
@@ -903,31 +955,42 @@ def kutulari_ciz(image_pil, predictions):
 
     draw = ImageDraw.Draw(img)
     w, h = img.size
-    kalinlik = max(4, int(min(w, h) * 0.008))
+    kalinlik = max(5, int(min(w, h) * 0.010))
+    font_size = max(18, int(min(w, h) * 0.030))
+    font = _font_yukle_gorsel(font_size)
     for p in predictions:
         bbox = p.get("bbox") or _prediction_bbox_normalize(p, img_w=w, img_h=h)
         if not bbox:
             continue
-        x1, y1, x2, y2 = [int(v) for v in bbox]
+        x1, y1, x2, y2 = [int(max(0, v)) for v in bbox]
+        x2, y2 = min(w - 1, x2), min(h - 1, y2)
         label = str(p.get('class','Tespit'))
-        conf = p.get('confidence', 0)
-        etiket = f"{label} %{conf}"
-        renk = _etiket_rengi(label)
-        # Siyah gölge + renkli kutu; uzak ekranda da görünür.
-        for off in range(kalinlik + 2, kalinlik - 2, -1):
-            draw.rectangle([x1-off//2, y1-off//2, x2+off//2, y2+off//2], outline=(0,0,0), width=2)
-        draw.rectangle([x1, y1, x2, y2], outline=renk, width=kalinlik)
-        try:
-            tw = draw.textlength(etiket)
-        except Exception:
-            tw = len(etiket) * 8
-        label_h = 26
-        y_text = max(0, y1 - label_h - 2)
-        draw.rectangle([x1, y_text, min(w, x1 + int(tw) + 12), y_text + label_h], fill=(15, 23, 42))
-        draw.rectangle([x1, y_text, min(w, x1 + int(tw) + 12), y_text + label_h], outline=renk, width=2)
-        draw.text([x1 + 6, y_text + 5], etiket, fill=(255, 255, 255))
-    return img
+        yardimci = _yardimci_sahne_mi(p)
+        etiket = _kutu_etiket_metni(p)
+        renk = _etiket_rengi(label, yardimci=yardimci)
 
+        # Hasarlı/sorunlu olan daha kalın ve kırmızı; yardımcı sahne daha ince.
+        width = kalinlik + 2 if _tespit_hasarli_mi(label) else max(3, kalinlik - 1)
+        # Siyah gölge + renkli kutu; uzak ekranda da okunur.
+        draw.rectangle([x1-2, y1-2, x2+2, y2+2], outline=(0, 0, 0), width=width + 2)
+        draw.rectangle([x1, y1, x2, y2], outline=renk, width=width)
+        try:
+            bbox_text = draw.textbbox((0, 0), etiket, font=font)
+            tw = bbox_text[2] - bbox_text[0]
+            th = bbox_text[3] - bbox_text[1]
+        except Exception:
+            tw = len(etiket) * max(9, font_size // 2)
+            th = font_size + 4
+        pad_x, pad_y = 9, 6
+        label_h = th + pad_y * 2
+        y_text = max(0, y1 - label_h - 4)
+        x_text2 = min(w - 1, x1 + int(tw) + pad_x * 2)
+        # Etiket arka planı: sorunlu kırmızı, sahne koyu lacivert/yeşil.
+        fill_color = (127, 29, 29) if _tespit_hasarli_mi(label) else ((22, 101, 52) if yardimci else (15, 23, 42))
+        draw.rectangle([x1, y_text, x_text2, y_text + label_h], fill=fill_color)
+        draw.rectangle([x1, y_text, x_text2, y_text + label_h], outline=renk, width=2)
+        draw.text([x1 + pad_x, y_text + pad_y], etiket, fill=(255, 255, 255), font=font)
+    return img
 
 def pil_to_b64_png(image_pil):
     buf = io.BytesIO()
@@ -938,7 +1001,7 @@ def pil_to_b64_png(image_pil):
 def analiz_tavsiyesi(anomali, risk, glint_var=False):
     """Tespit dışına çıkmayan, elektrik dağıtım/EKAT diline yakın bakım tavsiyesi."""
     a = str(anomali or "").lower()
-    if "normal" in a or "risk yok" in a or not a.strip() or "analiz yok" in a:
+    if "normal" in a or "risk yok" in a or "arıza tespiti yok" in a or "ariza tespiti yok" in a or not a.strip() or "analiz yok" in a:
         return "Belirgin arıza tespiti yok. Rutin devriye kapsamında arşivlenebilir; model güveni düşükse ikinci açıdan görsel doğrulama önerilir."
     if "izolat" in a or "insulator" in a:
         temel = "İzolatör bölgesi için kırık/çatlak/kirlenme ihtimaline karşı enerji sürekliliği etkisi değerlendirilerek saha görsel kontrolü yapılmalıdır."
@@ -971,7 +1034,7 @@ def ai_detayli_analiz_uret(anomali, risk_skoru, glint_var, hava, sicaklik):
     nem = float(hava.get("nem", 0) or 0)
     ruzgar = float(hava.get("ruzgar", 0) or 0)
     a = str(anomali or "").lower()
-    if "normal" in a or "analiz yok" in a or not a.strip():
+    if "normal" in a or "risk yok" in a or "arıza tespiti yok" in a or "ariza tespiti yok" in a or "analiz yok" in a or not a.strip():
         return "Görselde model tarafından belirgin arıza sınıfı üretilmedi. Bu sonuç kesin sağlamlık kanıtı değildir; saha şartları uygunsa farklı açıdan ikinci çekim ile doğrulama önerilir."
     if "izolat" in a or "insulator" in a:
         tanim = "Model izolatör bölgesinde bakım gerektirebilecek bir bulgu işaretlemiştir. İzolatörler kaçak akım, yüzeysel atlama ve izolasyon sürekliliği açısından kritik ekipmandır."
@@ -1025,6 +1088,8 @@ def ai_detayini_guvenle_guncelle(ai_detay, veri_notu, analiz_kaynagi):
 def ariza_sinifi_katsayisi(anomali):
     """Isı haritası ve risk hesabı için arıza sınıfına göre mühendislik ağırlığı."""
     ad = str(anomali or "").lower()
+    if "arıza tespiti yok" in ad or "ariza tespiti yok" in ad or "saha unsuru" in ad:
+        return 0.12
     if "izolat" in ad or "insulator" in ad:
         return 0.95
     if "gevş" in ad or "gevsek" in ad or "baglant" in ad or "connection" in ad:
@@ -1035,7 +1100,7 @@ def ariza_sinifi_katsayisi(anomali):
         return 0.80
     if "korozy" in ad or "corrosion" in ad or "pas" in ad:
         return 0.68
-    if "normal" in ad or "risk yok" in ad:
+    if "normal" in ad or "risk yok" in ad or "arıza tespiti yok" in ad or "ariza tespiti yok" in ad:
         return 0.10
     return 0.60
 
@@ -1055,7 +1120,7 @@ def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
     except Exception:
         ruzgar = nem = sicaklik = yildirim = 0
     ad = str(anomali or "").lower()
-    if "normal" in ad or "risk yok" in ad or "analiz yok" in ad or not ad.strip():
+    if "normal" in ad or "risk yok" in ad or "arıza tespiti yok" in ad or "ariza tespiti yok" in ad or "analiz yok" in ad or not ad.strip():
         base = 15
     else:
         base = ariza_sinifi_katsayisi(anomali) * 55
@@ -1069,7 +1134,7 @@ def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
     elif yildirim >= 15: cevre += 4
     if glint_var: cevre -= 6
     skor = base + (guven * 0.25) + cevre + (veri_guven_puani * 0.08)
-    if "normal" in ad or "risk yok" in ad:
+    if "normal" in ad or "risk yok" in ad or "arıza tespiti yok" in ad or "ariza tespiti yok" in ad:
         skor = min(skor, 30)
     return round(max(5, min(95, skor)), 1)
 
@@ -1112,34 +1177,65 @@ def cevre_metrik_ai_yorumlari(vp):
 
 
 def sesli_komut_bileseni():
-    """MVP için kararlı sesli komut paneli.
-    Not: Tarayıcı otomatik konuşma çözümleme yerine Streamlit native mikrofon kaydı + komut seçimi kullanılır.
-    Böylece jüri sunumunda JS/DOM removeChild hatası riski azaltılır.
+    """MVP için anlaşılır ve kararlı sesli komut paneli.
+
+    Bu yapı bilinçli olarak iki parçalıdır:
+    1) Telefon mikrofonundan ses kaydı alınır.
+    2) Tarayıcı/Streamlit tarafında güvenli çalışması için komut aşağıdaki seçimle uygulanır.
+
+    Not: Açık kaynak STT/harici servis bağlanmadan Streamlit native audio_input ses dosyasını
+    otomatik Türkçe metne çevirmez. Bu nedenle kayıt demo/kanıt, selectbox ise güvenli komut tetikleyicidir.
     """
     st.markdown("#### 🎙️ Sesli Komut / Mobil Saha Asistanı")
-    st.info("Mikrofon kaydı aktiftir. Kayıt sonrası komutu aşağıdan seçin: konum al, kamera aç, analiz et, rapor oluştur. Bu güvenli mod, tarayıcı JS hatası üretmeden MVP akışını gösterir.")
+    st.markdown(
+        """
+        <div class='voice-box'>
+        <b>Çalışma mantığı:</b> Telefonda ses kaydı alınır; kayıt kalıcı arşive yazılmaz.
+        Ardından aşağıdaki komut seçimi, sesli komutun güvenli MVP karşılığı olarak iş akışını ilerletir.
+        Bu yöntem jüri demosunda mikrofon/DOM hatası çıkarırsa bile ana analiz sistemini düşürmez.
+        </div>
+        """, unsafe_allow_html=True
+    )
+    if "voice_audio_counter" not in st.session_state:
+        st.session_state.voice_audio_counter = 0
     audio_input = getattr(st, "audio_input", None)
     if audio_input:
-        audio = st.audio_input("🎙️ Sesli komut kaydı", key="gridai_voice_audio")
-        if audio is not None:
-            st.success("Ses kaydı alındı. Komutu aşağıdaki alandan seçerek iş akışını ilerletebilirsiniz.")
+        audio = st.audio_input("🎙️ Sesli komut kaydı", key=f"gridai_voice_audio_{st.session_state.voice_audio_counter}")
+        colv1, colv2 = st.columns(2)
+        with colv1:
+            if audio is not None:
+                st.success("Ses kaydı alındı. Komutu aşağıdan seçip 'Komutu Uygula' butonuna basın.")
+            else:
+                st.caption("Mikrofona örnek komut söyleyin: 'konum al', 'kamera aç', 'analiz et', 'rapor oluştur'.")
+        with colv2:
+            if st.button("🗑️ Ses Kaydını Temizle", key="voice_audio_clear_btn", use_container_width=True):
+                st.session_state.voice_audio_counter += 1
+                st.session_state.voice_last_command = "Bekle"
+                st.rerun()
     else:
         st.warning("Bu Streamlit sürümünde native mikrofon kaydı yok. Komutu seçerek mobil yönlendirme paneliyle devam edin.")
-    komut = st.selectbox("Komut seç / sesli komut karşılığı", ["Bekle", "Konum al", "Kamera aç", "Çekim yap", "Analiz et", "Rapor oluştur"], key="voice_command_select")
-    if komut == "Konum al":
-        st.success("📍 Adım: Konum izni verin veya manuel enlem-boylam girin. Analiz bu konumla ilişkilendirilecektir.")
-    elif komut in ["Kamera aç", "Çekim yap"]:
-        st.success("📷 Adım: Aşağıdaki mobil kamera alanından fotoğraf çekin. Görsel analiz kuyruğuna alınacaktır.")
-    elif komut == "Analiz et":
-        st.success("🤖 Adım: Fotoğraf çekildiyse Roboflow/YOLO analizi ve risk skoru kontrol edilir.")
-    elif komut == "Rapor oluştur":
-        st.success("📄 Adım: PDF Rapor, SAP Excel veya WhatsApp QR alanından çıktı alın.")
+
+    komut = st.selectbox("Sesli komut karşılığı / Komut seç", ["Bekle", "Konum al", "Kamera aç", "Çekim yap", "Analiz et", "Rapor oluştur"], key="voice_command_select")
+    if st.button("▶️ Komutu Uygula", key="voice_command_apply", use_container_width=True):
+        st.session_state.voice_last_command = komut
+
+    aktif_komut = st.session_state.get("voice_last_command", komut)
+    if aktif_komut == "Konum al":
+        st.success("📍 Konum adımı: Cihaz konum izni verin veya manuel enlem-boylam girin. Analiz bu konumla ilişkilendirilir.")
+    elif aktif_komut in ["Kamera aç", "Çekim yap"]:
+        st.success("📷 Kamera adımı: Aşağıdaki mobil kamera alanından fotoğraf çekin. Görsel analiz kuyruğuna alınır.")
+    elif aktif_komut == "Analiz et":
+        st.success("🤖 Analiz adımı: Fotoğraf çekildiyse Roboflow/YOLO tespiti, kutu çizimi ve risk skoru kontrol edilir.")
+    elif aktif_komut == "Rapor oluştur":
+        st.success("📄 Rapor adımı: PDF Rapor, SAP Excel veya WhatsApp QR alanından çıktı alın.")
+    else:
+        st.info("Komut bekleniyor. Ses kaydı aldıktan sonra komutu seçip uygulayın.")
+
     adim1, adim2, adim3, adim4 = st.columns(4)
     adim1.info("📍 Konum al")
     adim2.info("📷 Kamera aç")
     adim3.info("🤖 Analiz et")
     adim4.info("📄 Rapor oluştur")
-
 
 def kurumsal_footer_html():
     """TÜBİTAK logosu/ibaresi olmadan kurumsal footer alanı."""
@@ -1180,9 +1276,16 @@ def gorsel_analiz_pipeline(dosya_adi, image_bytes, enlem, boylam, adres_detay, h
     tum_preds = ana_preds + yardimci_preds
     if yolo_sonuc is not None:
         yolo_sonuc["predictions"] = tum_preds
-        if yolo_sonuc.get("anomali") in ["Normal / Risk Yok", "Analiz yok"] and tum_preds:
-            top = max(tum_preds, key=lambda x: float(x.get("confidence", 0) or 0))
-            yolo_sonuc["anomali"] = top.get("class", "Saha unsuru adayı")
+        gercek_preds = [p for p in ana_preds if not _yardimci_sahne_mi(p)]
+        if gercek_preds:
+            # AI yorumu ve risk skoru yalnızca Roboflow/gerçek model tespitini baz alır.
+            top = max(gercek_preds, key=lambda x: float(x.get("confidence", 0) or 0))
+            yolo_sonuc["anomali"] = top.get("class", yolo_sonuc.get("anomali", "Tespit"))
+            yolo_sonuc["guven"] = top.get("confidence", yolo_sonuc.get("guven", 0))
+        elif yolo_sonuc.get("anomali") in ["Normal / Risk Yok", "Analiz yok"] and yardimci_preds:
+            # Yardımcı sahne katmanı direk/hat/ağaç gibi unsurları gösterebilir; arıza iddiası üretmez.
+            top = max(yardimci_preds, key=lambda x: float(x.get("confidence", 0) or 0))
+            yolo_sonuc["anomali"] = "Saha unsuru algılandı - arıza tespiti yok"
             yolo_sonuc["guven"] = top.get("confidence", yolo_sonuc.get("guven", 0))
             yolo_sonuc["kaynak"] = str(yolo_sonuc.get("kaynak", "")) + " + GridAI yardımcı sahne katmanı"
     annotated = kutulari_ciz(img_pil, tum_preds)
@@ -1736,6 +1839,18 @@ with st.sidebar:
     input_il = st.text_input("İl", value="")
     input_ilce = st.text_input("İlçe", value="")
     input_cadde = st.text_input("Cadde/Mahalle", value="")
+    cbs_sig_now = (str(input_il).strip(), str(input_ilce).strip(), str(input_cadde).strip())
+    cbs_sig_prev = st.session_state.get("_prev_cbs_sig")
+    if cbs_sig_prev is None:
+        st.session_state["_prev_cbs_sig"] = cbs_sig_now
+    elif cbs_sig_now != cbs_sig_prev:
+        # CBS alanı değiştiyse eski otomatik GPS/önceki konum override'ı haritayı kilitlemesin.
+        if any(cbs_sig_now):
+            st.session_state.harita_merkez_override = None
+            st.session_state.manuel_koordinat = None
+            st.session_state.cihaz_konum = None
+            st.session_state.yuklenen_arsiv = None
+        st.session_state["_prev_cbs_sig"] = cbs_sig_now
     st.markdown("<small style='color:#94A3B8;'>EXIF olmayan görseller için koordinat girerek kesin saha konumu belirleyebilirsiniz.</small>", unsafe_allow_html=True)
     ko1, ko2 = st.columns(2)
     manuel_lat_txt = ko1.text_input("Enlem", value="", placeholder="41.002700", key="manuel_lat_txt")
