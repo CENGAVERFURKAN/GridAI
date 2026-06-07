@@ -62,6 +62,11 @@ st.markdown("""
     .gridai-card b, .gridai-card strong {color:#E2E8F0;}
     .risk-pill {display:inline-block; padding:8px 12px; border-radius:999px; font-weight:800; color:white; background:linear-gradient(90deg,#0F766E,#0284C7);}
     .health-score {background:linear-gradient(135deg,#064E3B,#0369A1); color:white; border-radius:14px; padding:18px; border:1px solid #38BDF8; text-align:center;}
+    .weather-card {background:#1E293B !important; color:#E2E8F0 !important; padding:10px; border-radius:8px; border:1px solid #334155; text-align:center;}
+    .weather-card .date {color:#38BDF8 !important; font-weight:800;}
+    .weather-card .desc {color:#E2E8F0 !important; font-size:12px;}
+    .weather-card .temp {color:#F8FAFC !important; font-weight:800;}
+    .muted-safe {color:#CBD5E1 !important;}
     h1, h2, h3 {color:#0284C7 !important;}
 </style>
 """, unsafe_allow_html=True)
@@ -181,6 +186,7 @@ if "kullanici_adi" not in st.session_state: st.session_state.kullanici_adi = "Sa
 if "kullanici_gecmisi" not in st.session_state: st.session_state.kullanici_gecmisi = []
 if "yardimci_sahne_tahmini" not in st.session_state: st.session_state.yardimci_sahne_tahmini = True
 if "sesli_komut_aktif" not in st.session_state: st.session_state.sesli_komut_aktif = True
+if "cihaz_konum_otomatik_mesaj" not in st.session_state: st.session_state.cihaz_konum_otomatik_mesaj = ""
 
 def log_ekle(islem, *detaylar):
     detay = " | ".join(str(d) for d in detaylar if d is not None and str(d).strip() != "")
@@ -1298,8 +1304,9 @@ def arsiv_excel_olustur(db):
 
 
 def cihaz_canli_konumunu_al(aktif_istek=False):
-    """Tarayıcı GPS'i sadece kullanıcı açıkça istediğinde çalıştırır.
-    Böylece Streamlit Cloud'da tekrar eden JS/DOM çakışmaları azaltılır.
+    """Tarayıcı GPS'i alır. 
+    MVP gereği CBS boşken uygulama açılışında otomatik denenir; butonla da tekrar doğrulanabilir.
+    Sunucu/IP konumu asla kullanıcı konumu gibi kullanılmaz.
     """
     if not aktif_istek:
         return None, "Cihaz konumu otomatik alınmadı. 'Anlık cihaz konumunu kullan' butonuyla doğrulanabilir."
@@ -1326,24 +1333,11 @@ def cihaz_canli_konumunu_al(aktif_istek=False):
 # ⚡ 5. API, KONUM VE METEOROLOJİ
 # ==========================================
 def gercek_konum_bul():
-    """ÇÖZÜM: Adres boşsa veya API yanıtsız kalırsa, kullanıcının gerçek IP'sini bulur."""
-    try:
-        # Öncelikli olarak ip-api üzerinden gerçek konumu çek
-        r = requests.get("http://ip-api.com/json/", timeout=3).json()
-        if "lat" in r and "lon" in r:
-            return float(r["lat"]), float(r["lon"]), f"{r['city']}, {r['country']} (Gerçek IP Konumu)"
-    except: pass
-    
-    try:
-        # İkinci seçenek olarak ipinfo kullan
-        r = requests.get("https://ipinfo.io/json", timeout=3).json()
-        if "loc" in r:
-            lat, lon = r["loc"].split(",")
-            return float(lat), float(lon), f"{r['city']}, {r['country']} (Gerçek IP Konumu)"
-    except: pass
-    
-    # Tüm API'ler engellenmişse bulunulan varsayılan konum
-    return 41.0027, 39.7168, "Trabzon Merkez (Sistem Varsayılanı)"
+    """Sunucu/IP konumunu kullanıcı konumu gibi göstermemek için IP tabanlı konum kapalı.
+    Streamlit Cloud sunucusu bazen ABD/başka ülke IP'si döndürebilir.
+    Kesin saha konumu için tarayıcı GPS, CBS adresi veya manuel koordinat kullanılmalıdır.
+    """
+    return 41.0027, 39.7168, "Trabzon Merkez (Yedek Türkiye konumu - kesin saha konumu değildir)"
 
 @st.cache_data(show_spinner=False)
 def adres_koordinat_bul(il, ilce, cadde):
@@ -1363,7 +1357,7 @@ def adres_koordinat_bul(il, ilce, cadde):
             if r: return float(r[0]["lat"]), float(r[0]["lon"]), r[0]["display_name"]
         except: pass
     
-    # ÇÖZÜM: API yanıtsız kalırsa direkt kullanıcının bulunduğu IP'ye git
+    # API yanıtsız kalırsa sunucu IP konumu kullanılmaz; Türkiye yedek konumuna düşülür.
     return gercek_konum_bul()
 
 @st.cache_data(show_spinner=False)
@@ -1478,6 +1472,19 @@ def ekipman_saglik_skoru(analizler, vp):
     yildirim_ceza = 8 if yildirim >= 40 else (4 if yildirim >= 15 else 0)
     skor = 100 - max_risk - veri_ceza - yildirim_ceza
     return round(max(1, min(100, skor)), 1)
+
+def saglik_skoru_durumu(skor):
+    try:
+        skor = float(skor)
+    except Exception:
+        return "Hesaplanmadı"
+    if skor >= 80:
+        return "İYİ - İzleme yeterli"
+    if skor >= 60:
+        return "ORTA - Planlı kontrol önerilir"
+    if skor >= 40:
+        return "DİKKAT - Öncelikli saha kontrolü"
+    return "KRİTİK - Acil bakım değerlendirmesi"
 
 def analiz_katener_uygun_mu(analizler):
     adlar = ' '.join(str(a.get('anomali','')).lower() for a in (analizler or []))
@@ -1604,7 +1611,8 @@ def genis_pdf_olustur(path, vp):
     bold = ParagraphStyle("BB", fontName=FONT_BLD, fontSize=9.5, leading=14, textColor=colors.HexColor("#1E293B"))
     story = []
     story.append(Paragraph("GRIDAI KAPSAMLI ARIZA VE DURUM RAPORU", title))
-    story.append(Paragraph(f"Rapor Tarihi: {vp['tarih']} | Saha Kodu: {vp['token']} | Kullanıcı: {vp.get('kullanici_adi','')}", ParagraphStyle("S", fontName=FONT_REG, alignment=1, spaceAfter=18)))
+    rapor_tarihi_guncel = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+    story.append(Paragraph(f"Rapor Tarihi: {rapor_tarihi_guncel} | Saha Kodu: {vp['token']} | Kullanıcı: {vp.get('kullanici_adi','')}", ParagraphStyle("S", fontName=FONT_REG, alignment=1, spaceAfter=18)))
     story.append(Paragraph("Saha ve Ekip Bilgileri", h2))
     td1 = [
         [Paragraph("Ekip Adı:", bold), Paragraph(vp.get('ekip_adi',''), body)],
@@ -1637,8 +1645,12 @@ def genis_pdf_olustur(path, vp):
     story.append(t2)
     story.append(Spacer(1, 16))
     story.append(Paragraph("Genel Elektrik Hattı Sağlık Skoru", h2))
-    saglik = ekipman_saglik_skoru(vp.get('analizler', []), vp)
-    story.append(Paragraph(f"Genel sağlık skoru: <b>%{saglik}</b>. Skor; en yüksek görsel risk, konum/veri güvenilirliği ve yıldırım önceliği birlikte değerlendirilerek oluşturulmuş karar destek göstergesidir.", body))
+    if vp.get('analizler'):
+        saglik = ekipman_saglik_skoru(vp.get('analizler', []), vp)
+        saglik_durum = saglik_skoru_durumu(saglik)
+        story.append(Paragraph(f"Genel sağlık skoru: <b>%{saglik}</b> - <b>{saglik_durum}</b>. Skor; en yüksek görsel risk, konum/veri güvenilirliği ve yıldırım önceliği birlikte değerlendirilerek oluşturulmuş karar destek göstergesidir.", body))
+    else:
+        story.append(Paragraph("Henüz görsel/Roboflow analizi olmadığı için elektrik hattı sağlık skoru hesaplanmadı. Skor; en az bir doğrulanmış görsel analizi sonrasında üretilecektir.", body))
     story.append(Spacer(1, 16))
     story.append(Paragraph("Donanımsız Isınma Teknolojisi - Stefan-Boltzmann Risk Göstergesi", h2))
     sb = stefan_boltzmann_hesapla(vp)
@@ -1813,6 +1825,25 @@ with st.sidebar:
     st.session_state.sesli_komut_aktif = st.checkbox("Mobil sesli komut aktif", value=bool(st.session_state.get("sesli_komut_aktif", True)))
 
 
+
+# CBS boşsa uygulama açılışında canlı cihaz GPS'i otomatik dene.
+# Bu, önceki çalışan davranışı geri getirir; ABD/sunucu IP konumu kullanılmaz.
+try:
+    cbs_bos_otomatik = not any([str(input_il).strip(), str(input_ilce).strip(), str(input_cadde).strip()])
+    if cbs_bos_otomatik and not st.session_state.get("cihaz_konum") and get_geolocation is not None:
+        loc_auto, msg_auto = cihaz_canli_konumunu_al(aktif_istek=True)
+        st.session_state.cihaz_konum_otomatik_mesaj = msg_auto
+        if loc_auto:
+            st.session_state.cihaz_konum = loc_auto
+            st.session_state.harita_merkez_override = {
+                "lat": float(loc_auto["lat"]),
+                "lon": float(loc_auto["lon"]),
+                "adres": f"Otomatik Canlı Cihaz Konumu ({float(loc_auto['lat']):.6f}, {float(loc_auto['lon']):.6f})",
+                "kaynak": "Tarayıcı GPS / otomatik cihaz konumu",
+            }
+except Exception as _konum_auto_hata:
+    st.session_state.cihaz_konum_otomatik_mesaj = f"Otomatik cihaz konumu alınamadı: {_konum_auto_hata}"
+
 # ==========================================
 # ⚡ 8. ARŞİV VE CANLI VERİ YÖNETİMİ
 # ==========================================
@@ -1844,7 +1875,8 @@ if not g_mod:
             st.session_state.son_konum_kaynagi = "Tarayıcı GPS / cihaz konumu"
         else:
             enlem, boylam, adres_detay = adres_koordinat_bul(input_il, input_ilce, input_cadde)
-            st.session_state.son_konum_kaynagi = "CBS boş: geçici yedek/IP konumu. Kesin saha konumu için koordinat girin veya 'Anlık cihaz konumunu kullan' butonuna basın."
+            otomatik_msg = st.session_state.get("cihaz_konum_otomatik_mesaj", "")
+            st.session_state.son_konum_kaynagi = otomatik_msg or "CBS boş: Türkiye yedek konumu. Amerika/sunucu IP konumu kullanılmaz; kesin saha konumu için koordinat girin veya cihaz konum iznine izin verin."
     else:
         enlem, boylam, adres_detay = adres_koordinat_bul(input_il, input_ilce, input_cadde)
         st.session_state.son_konum_kaynagi = "CBS adres çözümleme"
@@ -1890,6 +1922,8 @@ with top_title_col:
     st.title("⚡ Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu")
 st.markdown(f"**Saha Kodu:** `{token}` | **Lokasyon:** {adres_detay}")
 st.caption(f"Konum kaynağı: {st.session_state.get('son_konum_kaynagi', '')}")
+if st.session_state.get("cihaz_konum_otomatik_mesaj") and not st.session_state.get("cihaz_konum"):
+    st.caption("Otomatik cihaz konumu: " + str(st.session_state.get("cihaz_konum_otomatik_mesaj")))
 
 with st.expander("📱 Mobil Hızlı Panel / Sidebar görünmüyorsa burayı kullan", expanded=False):
     st.caption("Telefonlarda sidebar genelde gizli menüye alınır. Saha personeli bu panelden kullanıcı ve koordinat bilgisini hızlı girebilir.")
@@ -1931,8 +1965,13 @@ c1.markdown(f"<div class='metric-box'><small>🔥 Sıcaklık / Nem</small><h3>{h
 c2.markdown(f"<div class='metric-box'><small>⚡ Tahmini Hat Akımı</small><h3>{tahmini_hat_akimi} A</h3></div>", unsafe_allow_html=True)
 c3.markdown(f"<div class='metric-box'><small>🍁 Yangın Riski</small><h3>{vejetasyon_yangin_riski_hesapla(hava['temp'],hava['nem'],hava['ruzgar']).split()[0]}</h3></div>", unsafe_allow_html=True)
 c4.markdown(f"<div class='metric-box'><small>⛈️ Aylık Yıldırım (API Verisi)</small><h3>{yildirim}</h3></div>", unsafe_allow_html=True)
-mevcut_saglik = ekipman_saglik_skoru(st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", []), {"yildirim": yildirim})
-st.markdown(f"<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:28px; font-weight:900;'>%{mevcut_saglik}</div><div style='font-size:12px;'>Roboflow tespiti, risk skoru, veri güvenilirliği ve yıldırım önceliğiyle hesaplanır.</div></div>", unsafe_allow_html=True)
+analiz_saglik_listesi = st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])
+if analiz_saglik_listesi:
+    mevcut_saglik = ekipman_saglik_skoru(analiz_saglik_listesi, {"yildirim": yildirim})
+    mevcut_saglik_durum = saglik_skoru_durumu(mevcut_saglik)
+    st.markdown(f"<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:28px; font-weight:900;'>%{mevcut_saglik}</div><div style='font-size:13px; font-weight:800;'>{mevcut_saglik_durum}</div><div style='font-size:12px;'>Roboflow tespiti, risk skoru, veri güvenilirliği ve yıldırım önceliğiyle hesaplanır.</div></div>", unsafe_allow_html=True)
+else:
+    st.markdown("<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:24px; font-weight:900;'>Analiz bekleniyor</div><div style='font-size:12px;'>Skor, en az bir görsel Roboflow/OpenCV analizinden sonra hesaplanır. Veri yokken skor üretilmez.</div></div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -2024,11 +2063,11 @@ w_cols = st.columns(5)
 for i in range(5):
     with w_cols[i]:
         st.markdown(f"""
-        <div style="background-color:#1E293B; padding:10px; border-radius:8px; border:1px solid #334155; text-align:center;">
-        <span style="color:#38BDF8; font-weight:bold;">{hava['t_gunler'][i]}</span><br><br>
-        <span style="font-size:24px;">{hava_emoji(hava['t_kod'][i]).split(' ')[0]}</span><br>
-        <span style="font-size:12px;">{hava_emoji(hava['t_kod'][i]).split(' ', 1)[1]}</span><br><br>
-        🔥 {hava['t_max'][i]}°C
+        <div style="background:#0F172A; color:#FFFFFF; padding:12px; border-radius:10px; border:1px solid #38BDF8; text-align:center; min-height:135px;">
+        <span style="color:#7DD3FC; font-weight:900; font-size:13px;">{hava['t_gunler'][i]}</span><br><br>
+        <span style="font-size:26px; color:#FFFFFF;">{hava_emoji(hava['t_kod'][i]).split(' ')[0]}</span><br>
+        <span style="color:#FFFFFF; font-size:12px; font-weight:700;">{hava_emoji(hava['t_kod'][i]).split(' ', 1)[1]}</span><br><br>
+        <span style="color:#FDE68A; font-weight:900;">🔥 {hava['t_max'][i]}°C</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -2436,7 +2475,7 @@ if panel:
         icerik = "<p>Elektrik dağıtım şebekelerinde görsel saha verisini yapay zeka, CBS, hava durumu ve bakım çıktılarıyla birleştirerek arıza öncesi erken risk tespiti ve güvenli saha karar desteği sağlamak.</p>"
     elif panel == "vizyon":
         baslik = "🔭 Vizyon"
-        icerik = "<p>EDAŞ ve bakım yüklenicileri için drone/mobil görüntü analizi, SAP PM uyumlu raporlama ve CBS tabanlı risk haritalaması sunan yerli ve ölçeklenebilir bir saha bakım platformu olmak.</p>"
+        icerik = "<p>EDAŞ ve bakım yüklenicileri için drone/mobil görüntü analizi, SAP PM uyumlu raporlama ve CBS tabanlı risk haritalaması sunan; Türkiye elektrik dağıtım saha süreçlerine göre uyarlanabilir, yerelleştirilebilir ve ölçeklenebilir bir saha bakım platformu olmak.</p>"
     else:
         baslik = "☎️ İletişim"
         telefon_iletisim = _secret_get("CONTACT_PHONE", "Telefon numarası Secrets > CONTACT_PHONE alanına eklenecek")
