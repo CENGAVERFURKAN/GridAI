@@ -32,6 +32,11 @@ import smtplib
 from email.message import EmailMessage
 
 try:
+    import plotly.graph_objects as go
+except Exception:
+    go = None
+
+try:
     from streamlit_js_eval import get_geolocation
 except Exception:
     get_geolocation = None
@@ -78,6 +83,18 @@ st.markdown("""
     .gridai-note {background:#E0F2FE; color:#0F172A; border:1px solid #0284C7; border-radius:10px; padding:10px;}
     .voice-box {background:#F8FAFC; color:#0F172A; border:1px solid #0284C7; border-radius:12px; padding:12px; margin-bottom:10px;}
     .voice-box b, .voice-box strong {color:#0F172A !important;}
+
+    .innovation-card {background:#0F172A; color:#E2E8F0; border:1px solid #334155; border-radius:14px; padding:16px; margin:8px 0;}
+    .innovation-card h4 {color:#38BDF8 !important; margin-top:0;}
+    .innovation-formula {background:#F8FAFC; color:#0F172A; border:1px solid #CBD5E1; border-radius:10px; padding:12px; font-weight:700;}
+    .decision-ok {background:linear-gradient(135deg,#064E3B,#0F766E); color:white; border-radius:14px; padding:18px; border:1px solid #34D399; text-align:center;}
+    .decision-warn {background:linear-gradient(135deg,#78350F,#D97706); color:white; border-radius:14px; padding:18px; border:1px solid #FBBF24; text-align:center;}
+    .decision-danger {background:linear-gradient(135deg,#7F1D1D,#DC2626); color:white; border-radius:14px; padding:18px; border:1px solid #F87171; text-align:center;}
+    @keyframes nanoglow_slow {0%,100%{opacity:0.45; box-shadow:0 0 8px #F59E0B;}50%{opacity:1; box-shadow:0 0 32px #F59E0B;}}
+    @keyframes nanoglow_fast {0%,100%{opacity:0.25; box-shadow:0 0 8px #EF4444;}50%{opacity:1; box-shadow:0 0 42px #EF4444;}}
+    .nanoglow-safe {background:#064E3B; color:white; border:2px solid #22C55E; border-radius:18px; padding:20px; text-align:center; box-shadow:0 0 18px #22C55E;}
+    .nanoglow-warning {background:#78350F; color:white; border:2px solid #F59E0B; border-radius:18px; padding:20px; text-align:center; animation:nanoglow_slow 1s infinite;}
+    .nanoglow-critical {background:#7F1D1D; color:white; border:2px solid #EF4444; border-radius:18px; padding:20px; text-align:center; animation:nanoglow_fast 0.45s infinite;}
 
 </style>
 """, unsafe_allow_html=True)
@@ -1703,6 +1720,236 @@ def smtp_rapor_gonder(alici, konu, govde, pdf_bytes, pdf_adi):
         return False, f"E-posta gönderim hatası: {e}"
 
 
+
+# ==========================================
+# ⚡ GRIDAI 4 YENİLİKÇİ MODÜL MOTORLARI
+# ==========================================
+def fieldsense_sehim_hesapla(w_nm, L_m, T_n):
+    """FieldSense parabolik katener yaklaşımı: S = w L^2 / (8T)."""
+    try:
+        w_nm, L_m, T_n = float(w_nm), float(L_m), float(T_n)
+        s_m = (w_nm * (L_m ** 2)) / max(1e-6, (8 * T_n))
+        return max(0.0, s_m), round(s_m * 100, 1)
+    except Exception:
+        return 0.0, 0.0
+
+
+def fieldsense_termal_tahmin(I_a, ortam_c, ruzgar_ms, hat_uzunlugu_m=80.0, r_ohm_m=0.00012, solar_w_m=70.0):
+    """Donanımsız sanal termal tahmin.
+    Bu değer termal kamera ölçümü değildir; akım, ortam sıcaklığı, rüzgâr ve güneş yüküyle karar destek göstergesi üretir.
+    """
+    try:
+        I_a = float(I_a); ortam_c = float(ortam_c); ruzgar_ms = max(0.0, float(ruzgar_ms))
+        joule_w_m = (I_a ** 2) * float(r_ohm_m)
+        solar_abs = float(solar_w_m) * 0.55
+        sogutma = 8.0 + 6.0 * math.sqrt(max(0.1, ruzgar_ms))
+        delta_t = (joule_w_m + solar_abs) / max(3.0, sogutma)
+        # MVP kararlı durum sınırı: gerçek termal ölçüm değil, mantıklı karar destek aralığı.
+        t_hat = ortam_c + min(65.0, max(0.0, delta_t))
+        risk = max(0, min(100, (t_hat - 45) * 2.1 + max(0, I_a - 500) * 0.035 - ruzgar_ms * 1.3))
+        return {
+            "joule_w_m": round(joule_w_m, 2),
+            "solar_w_m": round(solar_abs, 2),
+            "sogutma_katsayisi": round(sogutma, 2),
+            "t_hat": round(t_hat, 1),
+            "risk": round(max(0, risk), 1),
+        }
+    except Exception:
+        return {"joule_w_m":0,"solar_w_m":0,"sogutma_katsayisi":0,"t_hat":float(ortam_c or 0),"risk":0}
+
+
+def fieldsense_catenary_plot(L_m, S_m):
+    xs = np.linspace(0, float(L_m), 80)
+    # Direk uçları 0, orta nokta negatif sehim: görsel olarak aşağı sarkma.
+    ys = -4 * float(S_m) / max(1e-6, float(L_m) ** 2) * (xs - float(L_m)/2.0) ** 2 + float(S_m)
+    ys = -ys
+    df = pd.DataFrame({"Açıklık boyunca mesafe (m)": xs, "Sehim profili (m)": ys})
+    if go is None:
+        return df
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="Katener/parabol sehim", line=dict(width=4)))
+    fig.add_trace(go.Scatter(x=[0, L_m], y=[0, 0], mode="markers", name="Direk noktaları", marker=dict(size=10)))
+    fig.update_layout(height=330, margin=dict(l=20,r=20,t=35,b=20), template="plotly_white", xaxis_title="Açıklık (m)", yaxis_title="Düşey sehim (m)")
+    return fig
+
+
+def proof_netlik_indeksi_from_b64(b64_img):
+    try:
+        img = Image.open(io.BytesIO(base64.b64decode(b64_img))).convert("RGB")
+        gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
+        lap_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        idx = max(0, min(100, lap_var / 6.0))
+        return round(idx, 1), round(lap_var, 1)
+    except Exception:
+        return 60.0, 0.0
+
+
+def fieldproof_skoru(netlik_idx, exif_ok, mukerrer_ok, roboflow_guven=75):
+    netlik = max(0, min(100, float(netlik_idx)))
+    rf = max(0, min(100, float(roboflow_guven or 0)))
+    skor = (netlik * 0.38) + (20 if exif_ok else 0) + (17 if mukerrer_ok else 0) + (rf * 0.25)
+    return round(max(0, min(100, skor)), 1)
+
+
+def impact_maintenance_df(s_proof, mesken, sanayi, hastane, kamu):
+    satirlar = [
+        {"Abone Tipi": "Hastane / sağlık tesisi", "Etkilenen Adet": int(hastane), "Ağırlık": 50},
+        {"Abone Tipi": "Sanayi tesisi", "Etkilenen Adet": int(sanayi), "Ağırlık": 20},
+        {"Abone Tipi": "Kamu / kritik hizmet", "Etkilenen Adet": int(kamu), "Ağırlık": 12},
+        {"Abone Tipi": "Mesken abonesi", "Etkilenen Adet": int(mesken), "Ağırlık": 1},
+    ]
+    for s in satirlar:
+        s["Etki Puanı"] = round(float(s_proof) / 100.0 * s["Etkilenen Adet"] * s["Ağırlık"], 1)
+    return pd.DataFrame(satirlar).sort_values("Etki Puanı", ascending=False)
+
+
+def capex_karar_hesapla(n_toplam, n_kusur, dx_px, dy_px):
+    try:
+        theta = abs(math.degrees(math.atan(float(dx_px) / max(1e-6, float(dy_px)))))
+    except Exception:
+        theta = 0.0
+    c_index = (1 - (float(n_kusur) / max(1, float(n_toplam)))) * 100
+    aci_uygun = theta <= 2.0
+    karar = "ONAY" if c_index >= 90 and aci_uygun else "BLOKE"
+    gerekce = "Şartname uygunluk eşiği sağlandı." if karar == "ONAY" else "Direk eğiklik limiti veya kusurlu imalat oranı nedeniyle hakediş blokaj önerilir."
+    return round(theta, 2), round(c_index, 1), karar, gerekce
+
+
+def nanoglow_durum(v_kacak, c_farads=0.047):
+    v = float(v_kacak)
+    v_kap = min(3.3, max(0.0, v / 400.0 * 3.3))
+    e = 0.5 * float(c_farads) * (v_kap ** 2)
+    if v <= 0:
+        return {"frekans": 0, "sinif": "Güvenli / Pasif QR Modu", "css": "nanoglow-safe", "renk": "Yeşil", "enerji": round(e, 4), "vkap": round(v_kap, 2), "yorum": "Gövde kaçağı yok; etiket pasif güvenlik/kimlik modundadır."}
+    if v <= 110:
+        return {"frekans": 5, "sinif": "Hafif sızıntı / Uyarı", "css": "nanoglow-warning", "renk": "Turuncu", "enerji": round(e, 4), "vkap": round(v_kap, 2), "yorum": "Can güvenliği için saha doğrulaması, topraklama sürekliliği ve izolasyon kontrolü önerilir."}
+    return {"frekans": 10, "sinif": "Ölümcül kaçak / Kritik", "css": "nanoglow-critical", "renk": "Neon kırmızı", "enerji": round(e, 4), "vkap": round(v_kap, 2), "yorum": "Direk çevresi emniyete alınmalı; EKAT yetkili ekip tarafından enerji kesme/topraklama prosedürüyle acil kontrol yapılmalıdır."}
+
+
+def gridai_inovasyon_modulleri(enlem, boylam, hava, yildirim):
+    st.markdown("---")
+    st.subheader("🚀 GridAI Yenilikçi Karar Modülleri")
+    st.caption("Bu dört modül, mevcut analiz akışını bozmadan jüri demosunda gösterilecek kurumsal inovasyon katmanlarıdır. Hesaplar karar destek amaçlıdır; saha doğrulaması ve kurum prosedürleri esastır.")
+    tabs = st.tabs(["📸 FieldSense™", "🛡️ Field Proof™ / Impact", "📊 CAPEX Kabul", "🧬 NanoGlow™"])
+
+    with tabs[0]:
+        st.markdown("""
+        <div class='innovation-card'><h4>GridAI FieldSense™ - Donanımsız Muayene Motoru</h4>
+        Standart RGB kamera, Roboflow/YOLO tespiti ve canlı çevresel metriklerle iletken sehim ve sanal termal davranış için karar destek göstergesi üretir. Termal kamera veya hatta takılı IoT sensörü zorunlu değildir.</div>
+        """, unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        I = c1.slider("Anlık Akım I (A)", 0, 800, int(st.session_state.get("hat_akimi_fieldsense", 420)), 10, key="fs_akim")
+        ortam = c2.slider("Ortam Sıcaklığı (°C)", -15, 50, int(round(float(hava.get("temp", 22) or 22))), 1, key="fs_ortam")
+        ruzgar_ms_default = max(0, min(30, int(round(float(hava.get("ruzgar", 0) or 0) / 3.6))))
+        ruzgar_ms = c3.slider("Rüzgâr Hızı (m/s)", 0, 30, ruzgar_ms_default, 1, key="fs_ruzgar")
+        with st.expander("Mühendislik kabulleri / açıklık parametreleri", expanded=False):
+            k1, k2, k3 = st.columns(3)
+            L = k1.slider("Direkler arası açıklık L (m)", 30, 250, 80, 5, key="fs_L")
+            w_nm = k2.slider("İletken birim yükü w (N/m)", 2.0, 25.0, 8.5, 0.5, key="fs_w")
+            T_n = k3.slider("Hat çekme kuvveti T (N)", 2000, 60000, 18000, 500, key="fs_T")
+        s_m, s_cm = fieldsense_sehim_hesapla(w_nm, L, T_n)
+        th = fieldsense_termal_tahmin(I, ortam, ruzgar_ms, hat_uzunlugu_m=L)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Hesaplanan Sehim", f"{s_cm} cm")
+        m2.metric("Sanal Termal Tahmin", f"{th['t_hat']} °C")
+        m3.metric("Donanımsız Isınma Risk Skoru", f"%{th['risk']}")
+        st.markdown("<div class='innovation-formula'>Katener: S = w · L² / (8 · T) &nbsp;&nbsp; | &nbsp;&nbsp; Isıl denge: I²·R + qₛ = q𝚌 + qᵣ</div>", unsafe_allow_html=True)
+        fig = fieldsense_catenary_plot(L, s_m)
+        if go is not None:
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.line_chart(fig.set_index("Açıklık boyunca mesafe (m)"))
+        if th['risk'] >= 70:
+            st.error("AI Yorumu: Akım yükü ve soğutma koşulları dikkate alındığında sanal termal risk yüksek. Bağlantı noktası, izolatör zinciri ve iletken eklerinde termal doğrulama önerilir.")
+        elif th['risk'] >= 40:
+            st.warning("AI Yorumu: Donanımsız termal gösterge izleme seviyesinde. Aynı hatta tekrar görüntüleme ve yük altında trend takibi önerilir.")
+        else:
+            st.success("AI Yorumu: Mevcut akım, rüzgâr ve ortam sıcaklığına göre sanal termal risk düşük/izlenebilir seviyede.")
+
+    with tabs[1]:
+        st.markdown("""
+        <div class='innovation-card'><h4>Field Proof™ ve Etki Odaklı Önleyici Bakım</h4>
+        Fotoğrafın kanıt kalitesini denetler; netlik, EXIF/konum doğrulaması, mükerrer kontrolü ve Roboflow güveniyle bakım önceliği üretir.</div>
+        """, unsafe_allow_html=True)
+        son = (st.session_state.get("gorsel_kuyrugu") or st.session_state.get("son_analizler") or [None])[-1]
+        auto_netlik, lapv = (60.0, 0.0)
+        auto_exif = False
+        auto_guven = 75.0
+        if son:
+            auto_netlik, lapv = proof_netlik_indeksi_from_b64(son.get("gorsel_b64", ""))
+            auto_exif = "EXIF GPS" in str(son.get("konum_kaynagi", ""))
+            auto_guven = float(son.get("guven", 75) or 75)
+        p1, p2, p3 = st.columns(3)
+        netlik = p1.slider("Netlik İndeksi (0-100)", 0, 100, int(round(auto_netlik)), 1, key="proof_netlik")
+        exif_ok = p2.checkbox("EXIF/GPS Doğrulandı", value=auto_exif, key="proof_exif")
+        mukerrer_ok = p3.checkbox("Mükerrer Değil", value=True, key="proof_mukerrer")
+        st.caption(f"Laplacian varyansı: {lapv}. V_Lap düşükse fotoğraf bulanık kabul edilir.")
+        skor = fieldproof_skoru(netlik, exif_ok, mukerrer_ok, auto_guven)
+        st.metric("Kanıt Güven Skoru S_proof", f"%{skor}")
+        if skor < 75:
+            st.markdown("<div class='decision-danger'><h2>ARIZA REDDEDİLDİ</h2><p>Kanıt kalitesi, konum doğrulaması veya mükerrer kontrol eşiği geçilemedi. Yeni fotoğraf veya koordinat doğrulaması istenir.</p></div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='decision-ok'><h2>KANIT ONAYLANDI</h2><p>Bakım önceliği abone etki değerine göre hesaplanıyor.</p></div>", unsafe_allow_html=True)
+        a1, a2, a3, a4 = st.columns(4)
+        mesken = a1.number_input("Mesken", 0, 50000, 1250, key="impact_mesken")
+        sanayi = a2.number_input("Sanayi", 0, 5000, 18, key="impact_sanayi")
+        hastane = a3.number_input("Hastane", 0, 50, 1, key="impact_hastane")
+        kamu = a4.number_input("Kamu/Kritik", 0, 500, 5, key="impact_kamu")
+        imp_df = impact_maintenance_df(skor, mesken, sanayi, hastane, kamu)
+        st.dataframe(imp_df, use_container_width=True)
+        st.caption("P_score = S_proof × Σ(N_abone × w_tip). Hastane ve kritik tesisler meskenlerden daha yüksek ağırlıkla önceliklendirilir.")
+
+    with tabs[2]:
+        st.markdown("""
+        <div class='innovation-card'><h4>CAPEX & Geçici Kabul Otomasyonu</h4>
+        Yeni tesis/hakediş kabulünde direk eğikliği ve kusurlu imalat oranına göre şartname uygunluk endeksi üretir.</div>
+        """, unsafe_allow_html=True)
+        firma = st.radio("Denetlenecek müteahhit firma", ["A Firması - Kırsal Hat", "B Firması - Şehir Merkezi", "C Firması - Sanayi Beslemesi"], horizontal=True, key="capex_firma")
+        demo_defaults = {
+            "A Firması - Kırsal Hat": (42, 2, 3.0, 130.0),
+            "B Firması - Şehir Merkezi": (30, 5, 8.0, 160.0),
+            "C Firması - Sanayi Beslemesi": (55, 3, 4.0, 190.0),
+        }
+        d_n, d_k, d_dx, d_dy = demo_defaults.get(firma, (40, 2, 3.0, 150.0))
+        cc1, cc2, cc3, cc4 = st.columns(4)
+        n_toplam = cc1.number_input("Toplam direk", 1, 500, d_n, key="capex_toplam")
+        n_kusur = cc2.number_input("Kusurlu direk", 0, 500, min(d_k, d_n), key="capex_kusur")
+        dx = cc3.number_input("Δx piksel sapma", 0.0, 200.0, d_dx, step=0.5, key="capex_dx")
+        dy = cc4.number_input("Δy referans yüksekliği", 1.0, 1000.0, d_dy, step=1.0, key="capex_dy")
+        theta, cidx, karar, gerekce = capex_karar_hesapla(n_toplam, n_kusur, dx, dy)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Direk Eğiklik Açısı θ", f"{theta}°", help="θ = arctan(Δx/Δy), limit ≤ 2°")
+        m2.metric("Şartname Uygunluk Endeksi", f"%{cidx}")
+        m3.metric("Hakediş Kararı", karar)
+        if karar == "ONAY":
+            st.markdown(f"<div class='decision-ok'><h2>HAKEDİŞ ONAY</h2><p>{gerekce}</p></div>", unsafe_allow_html=True)
+        else:
+            st.markdown(f"<div class='decision-danger'><h2>HAKEDİŞ BLOKE</h2><p>{gerekce}</p></div>", unsafe_allow_html=True)
+        st.markdown("<div class='innovation-formula'>θ = arctan(Δx/Δy) &nbsp; | &nbsp; C_index = (1 - N_kusur / N_toplam) × 100</div>", unsafe_allow_html=True)
+
+    with tabs[3]:
+        st.markdown("""
+        <div class='innovation-card'><h4>NanoGlow™ Symbiote Skin - Donanım Işıma Emülatörü</h4>
+        Bu modül, direğe yapıştırılan pilsiz/simbiyotik kaçak gerilim etiketi için MVP emülatörüdür. Gerçek donanım ileri fazda; yazılım tarafı flaş frekansını ve can güvenliği riskini yorumlar.</div>
+        """, unsafe_allow_html=True)
+        v_kacak = st.slider("Gövde Kaçak Gerilimi (V AC)", 0, 400, 0, 5, key="nano_v")
+        c_f = st.slider("Esnek süperkondansatör C (F)", 0.001, 0.220, 0.047, 0.001, key="nano_c")
+        nd = nanoglow_durum(v_kacak, c_f)
+        st.markdown(f"""
+        <div class='{nd['css']}'><h2>⚡ NanoGlow™ {nd['renk']}</h2>
+        <h3>{nd['sinif']}</h3>
+        <p>Flaş frekansı: <b>{nd['frekans']} Hz</b> | V_kap: <b>{nd['vkap']} V</b> | Hasat enerji: <b>{nd['enerji']} J</b></p></div>
+        """, unsafe_allow_html=True)
+        st.markdown("<div class='innovation-formula'>E_hasat = 1/2 · C · V_kap² &nbsp; | &nbsp; f(V_kaçak)=0 Hz / 5 Hz / 10 Hz</div>", unsafe_allow_html=True)
+        if v_kacak > 110:
+            st.error("İnsan ve hayvan can güvenliği riski KRİTİK: direk çevresi emniyete alınmalı, enerji kesme/topraklama prosedürüyle EKAT yetkili ekip müdahale etmelidir.")
+        elif v_kacak > 0:
+            st.warning("Uyarı seviyesi kaçak: izolasyon zafiyeti, topraklama sürekliliği ve gövde kaçak gerilimi saha ölçümüyle doğrulanmalıdır.")
+        else:
+            st.success("Kaçak gerilim emülatöründe risk yok. Donanım pasif QR/kimlik modunda varsayılır.")
+        st.caption(nd['yorum'])
+
+
 # ==========================================
 # ⚡ 6. KAPSAMLI KURUMSAL PDF RAPORU
 # ==========================================
@@ -2434,6 +2681,8 @@ elif secim == "Canlı Drone Kamerası":
 if st.session_state.get("gorsel_kuyrugu"):
     st.markdown("### 📋 Anlık Analiz Tablosu")
     st.dataframe(analizleri_df(st.session_state.gorsel_kuyrugu), use_container_width=True)
+
+gridai_inovasyon_modulleri(enlem, boylam, hava, yildirim)
 
 st.markdown("### 🌐 Ortak Canlı Saha Analizleri")
 if supabase_kayitlar:

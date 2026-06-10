@@ -12,3 +12,4 @@ openpyxl>=3.1.0
 streamlit-js-eval>=0.1.7
 supabase
 opencv-python-headless
+plotly>=5.18.0
