@@ -96,6 +96,26 @@ st.markdown("""
     .nanoglow-warning {background:#78350F; color:white; border:2px solid #F59E0B; border-radius:18px; padding:20px; text-align:center; animation:nanoglow_slow 1s infinite;}
     .nanoglow-critical {background:#7F1D1D; color:white; border:2px solid #EF4444; border-radius:18px; padding:20px; text-align:center; animation:nanoglow_fast 0.45s infinite;}
 
+
+    /* V7.1 Mobil FieldSense + NanoGlow Sanal Donanım Modu */
+    .mobile-terminal-card {background:linear-gradient(135deg,#062E24,#0F172A); color:#E2E8F0; border:1px solid #00A8FF; border-radius:16px; padding:16px; margin:10px 0;}
+    .mobile-terminal-card h3, .mobile-terminal-card h4 {color:#7DD3FC !important; margin-top:0;}
+    .mobile-step {background:#F8FAFC; color:#0F172A; border:1px solid #94A3B8; border-radius:12px; padding:10px; margin:7px 0; font-weight:700;}
+    .mobile-step small {color:#334155 !important; font-weight:500;}
+    .quality-ok {background:#DCFCE7; color:#14532D; border:1px solid #22C55E; border-radius:10px; padding:10px; font-weight:800;}
+    .quality-warn {background:#FEF3C7; color:#78350F; border:1px solid #F59E0B; border-radius:10px; padding:10px; font-weight:800;}
+    .quality-bad {background:#FEE2E2; color:#7F1D1D; border:1px solid #EF4444; border-radius:10px; padding:10px; font-weight:800;}
+    @keyframes nanoglow_handheld_slow {0%,100%{filter:brightness(.65); box-shadow:0 0 8px #F59E0B;}50%{filter:brightness(1.35); box-shadow:0 0 45px #F59E0B;}}
+    @keyframes nanoglow_handheld_fast {0%,100%{filter:brightness(.55); box-shadow:0 0 12px #EF4444;}50%{filter:brightness(1.7); box-shadow:0 0 65px #EF4444;}}
+    .nanoglow-landscape {min-height:260px; border-radius:28px; border:4px solid #0F172A; color:white; padding:22px; position:relative; overflow:hidden; background:linear-gradient(135deg,#052e24,#020617 65%,#082f49); box-shadow:0 18px 45px rgba(0,0,0,.35); transform:rotate(0deg);}
+    .nanoglow-landscape .nano-badge {position:absolute; top:18px; left:22px; color:#7DD3FC; font-size:18px; font-weight:900; letter-spacing:.06em;}
+    .nanoglow-landscape .gridai-center {position:absolute; left:0; right:0; top:38%; text-align:center; font-size:48px; font-weight:1000; letter-spacing:.12em; color:#FFFFFF; text-shadow:0 0 20px rgba(125,211,252,.85);}
+    .nanoglow-landscape .nano-status {position:absolute; right:22px; bottom:18px; text-align:right; font-weight:800; font-size:14px; color:#E2E8F0;}
+    .nanoglow-landscape.safe {border-color:#22C55E; box-shadow:0 0 32px #22C55E;}
+    .nanoglow-landscape.warn {border-color:#F59E0B; animation:nanoglow_handheld_slow 1s infinite;}
+    .nanoglow-landscape.crit {border-color:#EF4444; animation:nanoglow_handheld_fast .42s infinite;}
+    .rotate-hint {background:#E0F2FE; color:#0F172A; border:1px solid #0284C7; border-radius:12px; padding:10px; font-weight:800; text-align:center;}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -215,6 +235,18 @@ if "kullanici_gecmisi" not in st.session_state: st.session_state.kullanici_gecmi
 if "yardimci_sahne_tahmini" not in st.session_state: st.session_state.yardimci_sahne_tahmini = True
 if "sesli_komut_aktif" not in st.session_state: st.session_state.sesli_komut_aktif = True
 if "cihaz_konum_otomatik_mesaj" not in st.session_state: st.session_state.cihaz_konum_otomatik_mesaj = ""
+
+# V7.1 QR tabanlı mobil saha terminali modu
+try:
+    _qp = st.query_params
+    _mode_qp = str(_qp.get("mode", "") or "").lower()
+except Exception:
+    _mode_qp = ""
+MOBIL_FIELD_MODE = _mode_qp in {"mobile", "mobile_field", "fieldsense_mobile", "mobil"}
+if "nanoglow_handheld_mode" not in st.session_state: st.session_state.nanoglow_handheld_mode = False
+if "mobil_field_mode" not in st.session_state: st.session_state.mobil_field_mode = MOBIL_FIELD_MODE
+if MOBIL_FIELD_MODE:
+    st.session_state.mobil_field_mode = True
 
 def log_ekle(islem, *detaylar):
     detay = " | ".join(str(d) for d in detaylar if d is not None and str(d).strip() != "")
@@ -1826,6 +1858,177 @@ def nanoglow_durum(v_kacak, c_farads=0.047):
     return {"frekans": 10, "sinif": "Ölümcül kaçak / Kritik", "css": "nanoglow-critical", "renk": "Neon kırmızı", "enerji": round(e, 4), "vkap": round(v_kap, 2), "yorum": "Direk çevresi emniyete alınmalı; EKAT yetkili ekip tarafından enerji kesme/topraklama prosedürüyle acil kontrol yapılmalıdır."}
 
 
+
+def mobile_query_url(base_url):
+    base = str(base_url or "").strip()
+    if not base:
+        return base
+    sep = "&" if "?" in base else "?"
+    if "mode=" in base:
+        return base
+    return f"{base}{sep}mode=mobile_field"
+
+
+def fieldsense_mobile_kalibrasyon(cekim_tipi, direk_gorunur, iletken_gorunur, baglanti_gorunur, H_real_m, H_pixel, L_m, w_nm, T_n, pitch_deg=0.0, roll_deg=0.0):
+    """Telefon/drone görüntüsünü karar destek seviyesinde piksel-metre zincirine bağlar.
+    Kesin ölçüm değildir; CBS/GIS referansı ve kontrollü çekimle ön risk tahmini üretir.
+    """
+    uygun = (cekim_tipi != "Yakın çekim") and bool(direk_gorunur) and bool(iletken_gorunur) and bool(baglanti_gorunur) and float(H_pixel or 0) > 20
+    k = float(H_real_m) / max(1.0, float(H_pixel or 1))
+    s_m, s_cm = fieldsense_sehim_hesapla(w_nm, L_m, T_n)
+    aci_ceza = min(25, abs(float(pitch_deg)) * 0.7 + abs(float(roll_deg)) * 0.7)
+    guven = 35
+    if direk_gorunur: guven += 16
+    if iletken_gorunur: guven += 18
+    if baglanti_gorunur: guven += 14
+    if cekim_tipi == "Geniş açı": guven += 12
+    if cekim_tipi == "Drone görüntüsü": guven += 10
+    guven = max(0, min(100, guven - aci_ceza))
+    if not uygun:
+        durum = "Sehim hesabı kapalı"
+        yorum = "Görüntü yakın çekim veya hat açıklığı görünür değil. İzolatör/travers detay fotoğrafında sehim hesabı yapılmaz; geniş açıdan direk ve iletken birlikte çekilmelidir."
+        s_cm_goster = None
+    else:
+        durum = "Sehim ön tahmini aktif"
+        yorum = "CBS açıklığı + bilinen direk boyu + piksel/metre ölçeğiyle donanımsız sehim ön tahmini üretildi. Pilot sahada LiDAR/manuel ölçümle kalibrasyon hedeflenir."
+        s_cm_goster = s_cm
+    return {"uygun": uygun, "k": round(k, 4), "s_cm": s_cm_goster, "guven": round(guven, 1), "durum": durum, "yorum": yorum}
+
+
+def akustik_anomali_skoru(hum_100, band_2_8, patlama, referans_benzerlik):
+    skor = float(hum_100) * 0.28 + float(band_2_8) * 0.32 + float(patlama) * 0.18 + float(referans_benzerlik) * 0.22
+    skor = max(0, min(100, skor))
+    if skor >= 75:
+        durum = "Yüksek olasılıklı akustik anomali ön uyarısı"
+        aksiyon = "Profesyonel akustik/termal ölçüm ve EKAT yetkili saha kontrolü önerilir."
+        css = "quality-bad"
+    elif skor >= 45:
+        durum = "Şüpheli elektriksel cızırtı / izleme"
+        aksiyon = "Aynı noktadan 5-10 sn ikinci kayıt ve görsel doğrulama önerilir."
+        css = "quality-warn"
+    else:
+        durum = "Normal saha sesi / belirgin anomali yok"
+        aksiyon = "Ses verisi tek başına arıza kanıtı değildir; görsel ve CBS verisiyle birlikte değerlendirilir."
+        css = "quality-ok"
+    return {"skor": round(skor,1), "durum": durum, "aksiyon": aksiyon, "css": css}
+
+
+def nanoglow_handheld_emulator(prefix="nano_mobile"):
+    st.markdown("<div class='rotate-hint'>↔ Telefonu yatay tutun: bu ekran NanoGlow™ etiketini elde tutulan sanal donanım gibi gösterir.</div>", unsafe_allow_html=True)
+    v = st.slider("Sanal gövde kaçak gerilimi (V AC)", 0, 400, 0, 10, key=f"{prefix}_v")
+    nd = nanoglow_durum(v, c_farads=0.22)
+    if v <= 0:
+        klass = "safe"; label = "GÜVENLİ / PASİF"
+    elif v <= 110:
+        klass = "warn"; label = "UYARI / 5 Hz"
+    else:
+        klass = "crit"; label = "KRİTİK / 10 Hz"
+    st.markdown(f"""
+    <div class='nanoglow-landscape {klass}'>
+        <div class='nano-badge'>NanoGlow™</div>
+        <div class='gridai-center'>GridAI</div>
+        <div class='nano-status'>
+            {label}<br>
+            Kaçak: {v} V AC<br>
+            Frekans: {nd['frekans']} Hz<br>
+            Enerji: {nd['enerji']} J
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.caption("Bu ekran gerçek donanım değildir; Faz 2 NanoGlow etiketinin LED frekans kodlu uyarısını mobilde sanal olarak gösteren emülatördür. Gerçek etikette GridAI kamera bu 5/10 Hz yanıp sönme frekansını okuyacaktır.")
+    return nd
+
+
+def mobil_fieldsense_plus_panel(enlem, boylam, hava, yildirim):
+    st.markdown("""
+    <div class='mobile-terminal-card'>
+        <h3>📱 GridAI FieldSense Mobile+</h3>
+        QR ile açılan bu modda telefon; kamera, GPS, ses ve kullanıcı girdilerini kullanarak sahada düşük maliyetli ön risk değerlendirmesi üretir.
+        Masaüstü panel yönetim/raporlama ekranı; telefon ise veri toplama ve ön karar cihazıdır.
+    </div>
+    """, unsafe_allow_html=True)
+
+    rehber, kalib, termal, akustik, nano = st.tabs(["📐 Çekim Rehberi", "📏 Kalibrasyon/Sehim", "🔥 Isıl Risk", "🎙️ Akustik Ön Uyarı", "🧬 NanoGlow Mobil"])
+    with rehber:
+        st.markdown("""
+        <div class='mobile-step'>1. Güvenli mesafeyi koru.<br><small>EKAT yetkili personel prosedürü, yaklaşma mesafesi ve KKD kuralları esastır.</small></div>
+        <div class='mobile-step'>2. Geniş açıdan çekim yap.<br><small>Direk, izolatör ve iletken aynı karede olursa FieldSense sehim ön kontrolü açılır.</small></div>
+        <div class='mobile-step'>3. Yakın çekimde sehim hesabı yapılmaz.<br><small>Yakın çekim yalnızca izolatör/travers/bağlantı kusuru için kullanılır.</small></div>
+        <div class='mobile-step'>4. Bulanık görüntüde kanıt skoru düşer.<br><small>Field Proof netlik ve konum doğrulamasını kalite kapısı olarak kullanır.</small></div>
+        """, unsafe_allow_html=True)
+        st.info("MVP’de bu bölüm AR hazırlıklı çekim kalite rehberidir. Faz 2’de ARCore/ARKit ile gerçek zamanlı AR yönlendirme hedeflenir.")
+
+    with kalib:
+        c1, c2, c3 = st.columns(3)
+        cekim_tipi = c1.selectbox("Çekim tipi", ["Geniş açı", "Yakın çekim", "Drone görüntüsü"], key="fs_mob_cekim")
+        direk_gorunur = c2.checkbox("Direk tamamen görünüyor", value=True, key="fs_mob_direk")
+        iletken_gorunur = c3.checkbox("İletken/hat görünüyor", value=True, key="fs_mob_iletken")
+        b1, b2, b3 = st.columns(3)
+        baglanti_gorunur = b1.checkbox("Bağlantı noktaları görünüyor", value=True, key="fs_mob_baglanti")
+        H_real = b2.slider("CBS direk boyu H (m)", 8.0, 18.0, 12.0, 0.5, key="fs_mob_hreal")
+        H_pix = b3.slider("Görüntüde direk boyu (px)", 40, 2200, 620, 20, key="fs_mob_hpix")
+        d1, d2, d3 = st.columns(3)
+        L = d1.slider("CBS direk açıklığı L (m)", 30, 250, 80, 5, key="fs_mob_L")
+        w = d2.slider("İletken birim yükü w (N/m)", 2.0, 25.0, 8.5, 0.5, key="fs_mob_w")
+        T = d3.slider("Hat çekme kuvveti T (N)", 2000, 60000, 18000, 500, key="fs_mob_T")
+        a1, a2 = st.columns(2)
+        pitch = a1.slider("Telefon pitch/yunuslama tahmini (°)", -35, 35, 0, 1, key="fs_mob_pitch")
+        roll = a2.slider("Telefon roll/yatma tahmini (°)", -35, 35, 0, 1, key="fs_mob_roll")
+        km = fieldsense_mobile_kalibrasyon(cekim_tipi, direk_gorunur, iletken_gorunur, baglanti_gorunur, H_real, H_pix, L, w, T, pitch, roll)
+        cols = st.columns(4)
+        cols[0].metric("Piksel-metre katsayısı", f"{km['k']} m/px")
+        cols[1].metric("Ölçüm güveni", f"%{km['guven']}")
+        cols[2].metric("Sehim", "Kapalı" if km['s_cm'] is None else f"{km['s_cm']} cm")
+        cols[3].metric("Durum", km['durum'])
+        st.markdown(f"<div class='{ 'quality-ok' if km['uygun'] else 'quality-warn' }'>{km['yorum']}</div>", unsafe_allow_html=True)
+        st.caption("Formül zinciri: Kamera matrisi K + CBS anchor + k = H_real / H_pixel + S = w·L²/(8T). Sonuç karar destek amaçlıdır.")
+
+    with termal:
+        t1, t2, t3 = st.columns(3)
+        I = t1.slider("Anlık/SCADA akım I (A)", 0, 800, 420, 10, key="fs_mob_akim")
+        ortam = t2.slider("Meteoroloji ortam sıcaklığı (°C)", -15, 50, int(round(float(hava.get("temp", 22) or 22))), 1, key="fs_mob_ortam")
+        ruzgar = t3.slider("Meteoroloji rüzgâr hızı (m/s)", 0, 30, max(0, min(30, int(round(float(hava.get("ruzgar", 0) or 0)/3.6)))), 1, key="fs_mob_ruzgar")
+        termal_var = st.checkbox("Harici/gerçek termal değer var", value=False, key="fs_mob_termal_var")
+        manuel_termal = st.number_input("Harici termal ölçüm (°C)", value=65.0, min_value=-20.0, max_value=180.0, step=1.0, disabled=not termal_var, key="fs_mob_termal_val")
+        th = fieldsense_termal_tahmin(I, ortam, ruzgar)
+        if termal_var:
+            risk = max(0, min(100, (float(manuel_termal)-45)*2.2 + max(0, I-500)*0.03 - ruzgar*1.0))
+            st.metric("Hibrit termal risk", f"%{round(risk,1)}", help="Harici termal değer + Joule/hava düzeltmesiyle hesaplanır.")
+            st.success(f"Gerçek/harici termal veri girildi: {manuel_termal} °C. Sanal model sapması: {round(float(manuel_termal)-th['t_hat'],1)} °C")
+        else:
+            st.metric("Sanal ısıl risk", f"%{th['risk']}", help="Termal kamera ölçümü değildir; I²R + meteoroloji düzeltmesiyle ön tahmindir.")
+            st.warning("Termal kamera yok: bu değer gerçek sıcaklık ölçümü değil, Joule yasası + meteorolojiyle üretilen sanal ısıl karar destek göstergesidir.")
+        st.caption("Joule/ısı dengesi: I²R + qₛ = q𝚌 + qᵣ. Rüzgâr arttıkça konveksiyon, güneş etkisi ve akım arttıkça ısıl risk değişir.")
+
+    with akustik:
+        st.info("Bu bölüm sesli komut değildir. Telefon videosu/sesinden elektriksel ark-cızırtı benzeri örüntüler için ön uyarı üretir.")
+        audio_obj = None
+        if hasattr(st, "audio_input"):
+            audio_obj = st.audio_input("5 saniyelik saha sesi kaydı al", key="fs_mob_audio")
+            if audio_obj:
+                st.audio(audio_obj.getvalue(), format="audio/wav")
+        else:
+            st.caption("Bu Streamlit sürümünde doğrudan audio_input yoksa, değerler simülasyon sliderlarıyla gösterilir.")
+        aa1, aa2 = st.columns(2)
+        hum = aa1.slider("100 Hz/harmonik yoğunluğu", 0, 100, 20, 5, key="ak_hum")
+        band = aa2.slider("2–8 kHz cızırtı bandı", 0, 100, 25, 5, key="ak_band")
+        aa3, aa4 = st.columns(2)
+        pat = aa3.slider("Ani çıtırtı/patlama deseni", 0, 100, 10, 5, key="ak_pat")
+        ref = aa4.slider("Öğretilmiş ark/cızırtı imzasına benzerlik", 0, 100, 30, 5, key="ak_ref")
+        ak = akustik_anomali_skoru(hum, band, pat, ref)
+        st.markdown(f"<div class='{ak['css']}'>{ak['durum']} — Skor %{ak['skor']}<br><small>{ak['aksiyon']}</small></div>", unsafe_allow_html=True)
+        if st.button("🧹 Ses Kaydını Temizle / Akustik Modu Sıfırla", key="ak_clear", use_container_width=True):
+            st.success("Kayıt kalıcı arşive alınmadı. Yeni kayıt için sayfayı yenileyebilir veya yeni ses alabilirsiniz.")
+
+    with nano:
+        if st.button("📱 NanoGlow Sanal Donanımı Aç/Kapat", key="nano_mobile_toggle", use_container_width=True):
+            st.session_state.nanoglow_handheld_mode = not st.session_state.get("nanoglow_handheld_mode", False)
+        if st.session_state.get("nanoglow_handheld_mode", False):
+            nanoglow_handheld_emulator(prefix="nano_mobile_terminal")
+        else:
+            st.info("Butona basınca telefon ekranı yatay donanım görünümüne uygun bir NanoGlow™ sanal etiket moduna geçer. Ağır JS kullanılmaz; Streamlit DOM hatası riskini azaltmak için CSS emülasyon yapılır.")
+
+
 def gridai_inovasyon_modulleri(enlem, boylam, hava, yildirim):
     st.markdown("---")
     st.subheader("🚀 GridAI Yenilikçi Karar Modülleri")
@@ -1835,8 +2038,17 @@ def gridai_inovasyon_modulleri(enlem, boylam, hava, yildirim):
     with tabs[0]:
         st.markdown("""
         <div class='innovation-card'><h4>GridAI FieldSense™ - Donanımsız Muayene Motoru</h4>
-        Standart RGB kamera, Roboflow/YOLO tespiti ve canlı çevresel metriklerle iletken sehim ve sanal termal davranış için karar destek göstergesi üretir. Termal kamera veya hatta takılı IoT sensörü zorunlu değildir.</div>
+        Standart RGB kamera, Roboflow/YOLO tespiti ve canlı çevresel metriklerle iletken sehim ve sanal termal davranış için karar destek göstergesi üretir. Termal kamera veya hatta takılı IoT sensörü zorunlu değildir.<br><br>
+        <b>V7.1 Mobile+ Notu:</b> Yenilik telefonda başlar. QR ile açılan mobil terminalde kamera, GPS, ses, CBS/GIS referansı ve meteoroloji verisi birlikte kullanılır.</div>
         """, unsafe_allow_html=True)
+        with st.expander("📱 FieldSense Mobile+ teknik zinciri / jüri savunma modu", expanded=False):
+            st.markdown("""
+            <div class='gridai-note'>
+            <b>Doğru iddia:</b> Telefon LiDAR veya termal kameranın yerine kesin ölçüm cihazı olarak geçmez; düşük maliyetli <b>ön risk tarama ve bakım önceliklendirme</b> cihazına dönüşür.<br><br>
+            <b>Kalibrasyon zinciri:</b> EXIF/telefon bilgisi → kamera matrisi K → CBS direk tipi/açıklık → bilinen direk boyu → piksel/metre oranı → homografi/perspektif düzeltme → sehim ön tahmini.<br>
+            <b>Akustik zincir:</b> Video/ses kaydı → 100 Hz harmonikler + 2–8 kHz cızırtı bandı → öğretilmiş ark/cızırtı imzasıyla karşılaştırma → akustik anomali ön uyarısı.
+            </div>
+            """, unsafe_allow_html=True)
         c1, c2, c3 = st.columns(3)
         I = c1.slider("Anlık Akım I (A)", 0, 800, int(st.session_state.get("hat_akimi_fieldsense", 420)), 10, key="fs_akim")
         ortam = c2.slider("Ortam Sıcaklığı (°C)", -15, 50, int(round(float(hava.get("temp", 22) or 22))), 1, key="fs_ortam")
@@ -1929,9 +2141,12 @@ def gridai_inovasyon_modulleri(enlem, boylam, hava, yildirim):
 
     with tabs[3]:
         st.markdown("""
-        <div class='innovation-card'><h4>NanoGlow™ Symbiote Skin - Donanım Işıma Emülatörü</h4>
-        Bu modül, direğe yapıştırılan pilsiz/simbiyotik kaçak gerilim etiketi için MVP emülatörüdür. Gerçek donanım ileri fazda; yazılım tarafı flaş frekansını ve can güvenliği riskini yorumlar.</div>
+        <div class='innovation-card'><h4>NanoGlow™ Symbiote Skin - Faz 2 Laboratuvar Prototipi</h4>
+        Bu modül hazır saha ürünü iddiası değil; direk gövdesinde oluşabilecek kaçak gerilim, yüzey potansiyel farkı ve yakın alan etkilerinden enerji hasadı yapmayı hedefleyen donanım Ar-Ge konseptinin MVP emülatörüdür.<br><br>
+        <b>Güvenli iddia:</b> GridAI yazılımı, gerçek NanoGlow etiketinin LED flaş frekansını kamera ile okuyup risk sınıfına çevirecek şekilde hazırlanır. Canlı şebeke ekipmanına izinsiz donanım montajı yapılmaz; laboratuvar doğrulaması ve yetkili kurum onayı gerekir.</div>
         """, unsafe_allow_html=True)
+        with st.expander("📱 Telefon ekranında NanoGlow sanal donanım modu", expanded=False):
+            nanoglow_handheld_emulator(prefix="nano_desktop_handheld")
         v_kacak = st.slider("Gövde Kaçak Gerilimi (V AC)", 0, 400, 0, 5, key="nano_v")
         c_f = st.slider("Esnek süperkondansatör C (F)", 0.001, 0.220, 0.047, 0.001, key="nano_c")
         nd = nanoglow_durum(v_kacak, c_f)
@@ -2440,7 +2655,7 @@ st.markdown("---")
 # ==========================================
 st.subheader("📸 Yapay Zeka Analiz Odası")
 st.caption("Not: Roboflow yalnızca eğitildiği/etiketlendiği sınıfları güvenilir tespit eder. EXIF/GPS olmayan yüklenmiş görseller kesin saha konumu kabul edilmez; koordinat alanından manuel doğrulama yapılabilir.")
-secim = st.radio("Veri Girişi", ["Görsel Ekle", "Mobil Saha Terminali", "Canlı Drone Kamerası"], horizontal=True)
+secim = st.radio("Veri Girişi", ["Görsel Ekle", "Mobil Saha Terminali", "Canlı Drone Kamerası"], horizontal=True, index=(1 if st.session_state.get("mobil_field_mode", False) else 0))
 
 b64_gorsel, yolo_durum, glint_durum, risk_puan = None, None, False, 0
 aktif_analizler = []
@@ -2581,21 +2796,27 @@ if secim == "Görsel Ekle":
             st.rerun()
 
 elif secim == "Mobil Saha Terminali":
-    st.markdown("#### 📱 Telefon Kamerasından QR ile Demo Bağlantısı")
+    if st.session_state.get("mobil_field_mode", False):
+        st.success("📱 QR ile Mobil FieldSense Saha Terminali açıldı. Yenilik modları telefonda aktif başlar.")
+    st.markdown("#### 📱 QR Tabanlı Mobil FieldSense Saha Terminali")
     public_url = _secret_get("PUBLIC_APP_URL", "").strip() or st.session_state.get("mobil_qr_url", "") or "http://localhost:8501"
     public_url = st.text_input("QR ile okutulacak panel URL'si", value=public_url, placeholder="https://gridai-demo.streamlit.app")
     st.session_state.mobil_qr_url = public_url
+    mobile_url = mobile_query_url(public_url)
     if public_url:
-        qr_b64 = qr_png_b64(public_url)
+        qr_b64 = qr_png_b64(mobile_url)
         st.markdown(f"""
         <div style="background-color:#1E293B; padding:20px; border-radius:10px; color:white; font-family:sans-serif; border:1px solid #334155;">
-            <p><b>Mobil Demo Akışı:</b> Telefon/tablet ile bu QR kodu okutun, aynı Streamlit panelini açın, aşağıdaki kamera alanından görüntü alın ve analiz edin.</p>
+            <p><b>Mobil Demo Akışı:</b> Telefon/tablet ile bu QR kodu okutunca <b>GridAI Mobil FieldSense Saha Terminali</b> açılır.</p>
+            <p>Kamera + GPS + FieldSense Mobile+ + Akustik Ön Uyarı + NanoGlow Sanal Donanım Modu telefonda aktif olur.</p>
             <img src="data:image/png;base64,{qr_b64}" width="160" style="background:white; padding:8px; border-radius:8px;">
-            <p style="color:#94A3B8; margin-top:10px;">URL: {public_url}</p>
+            <p style="color:#94A3B8; margin-top:10px;">Mobil URL: {mobile_url}</p>
         </div>
         """, unsafe_allow_html=True)
     else:
         st.warning("QR üretmek için Streamlit Cloud URL'sini yazın veya Secrets içine PUBLIC_APP_URL ekleyin.")
+
+    mobil_fieldsense_plus_panel(enlem, boylam, hava, yildirim)
 
     st.markdown("#### 📍 Canlı çekim konumu")
     if st.button("📡 Mobil cihaz konumunu al", use_container_width=True, key="mobil_konum_al_btn"):
