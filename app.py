@@ -57,20 +57,13 @@ st.set_page_config(page_title="GridAI | DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DA
 st.markdown('\n/* === GridAI Sidebar Açılabilirlik Düzeltmesi V7.4.5 ===\n   Amaç: Kullanıcı sol sidebar\'ı kapatsa bile Streamlit\'in açma oku/menü kontrolü görünür kalsın.\n*/\n<style>\n[data-testid="collapsedControl"],\n[data-testid="stSidebarCollapsedControl"] {\n    display: flex !important;\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n    z-index: 999999 !important;\n}\nbutton[kind="header"],\nheader button,\n[data-testid="stHeader"] button {\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n}\n[data-testid="stSidebar"] {\n    z-index: 9999 !important;\n}\n.gridai-sidebar-help {\n    position: fixed;\n    left: 10px;\n    bottom: 12px;\n    z-index: 999998;\n    background: rgba(0, 75, 50, 0.92);\n    color: white;\n    padding: 8px 10px;\n    border-radius: 999px;\n    font-size: 12px;\n    box-shadow: 0 6px 20px rgba(0,0,0,0.20);\n}\n@media (max-width: 768px) {\n    .gridai-sidebar-help {\n        font-size: 11px;\n        padding: 7px 9px;\n    }\n}\n</style>\n', unsafe_allow_html=True)
 
 
-# === GridAI Ana Ekran Hızlı Menü Yedek Alanı V7.4.5 ===
-try:
-    with st.expander("☰ Menü kapandıysa buradan devam et", expanded=False):
-        st.info("Sol menüyü kapattıysan sol üstteki küçük oka/☰ simgesine basarak tekrar açabilirsin. Kayıt sırasında panik olmamak için bu yedek alan eklendi.")
-        st.caption("Jüri kayıt akışı: Görsel yükle/kamera → analiz → FieldSense → PDF/Excel çıktı → arşiv.")
-except Exception:
-    pass
 
 st.markdown('\n<div class="gridai-sidebar-help">☰ Menü kapandıysa sol üstteki oku kullan</div>\n', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
     [data-testid="stStatusWidget"] {visibility: hidden;}
-    header {visibility: hidden;}
+    [data-testid="stHeader"] {background: transparent;}
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stButton > button {background-color:#0F766E; color:white; border-radius:8px; min-height:42px; width:100%; font-weight:bold; border:none;}
@@ -269,6 +262,7 @@ if "mobil_qr_url" not in st.session_state: st.session_state.mobil_qr_url = ""
 if "cihaz_konum" not in st.session_state: st.session_state.cihaz_konum = None
 if "cihaz_konum_mesaj" not in st.session_state: st.session_state.cihaz_konum_mesaj = ""
 if "harita_merkez_override" not in st.session_state: st.session_state.harita_merkez_override = None
+if "harita_refresh_id" not in st.session_state: st.session_state.harita_refresh_id = 0
 if "son_konum_kaynagi" not in st.session_state: st.session_state.son_konum_kaynagi = ""
 if "manuel_koordinat" not in st.session_state: st.session_state.manuel_koordinat = None
 if "kurumsal_panel" not in st.session_state: st.session_state.kurumsal_panel = ""
@@ -2791,6 +2785,7 @@ with st.sidebar:
                 "kaynak": "Manuel koordinat / operatör doğrulaması",
             }
             log_ekle("CBS", f"Manuel koordinat işlendi: {ml:.6f}, {mn:.6f}")
+            st.session_state.harita_refresh_id = st.session_state.get("harita_refresh_id", 0) + 1
             st.rerun()
         except Exception:
             st.error("Enlem ve boylam sayısal olmalı. Örnek: 41.002700 / 39.716800")
@@ -2800,6 +2795,7 @@ with st.sidebar:
             st.session_state.cihaz_konum = loc
             st.session_state.harita_merkez_override = {"lat": float(loc["lat"]), "lon": float(loc["lon"]), "adres": f"Anlık Cihaz Konumu ({float(loc['lat']):.6f}, {float(loc['lon']):.6f})", "kaynak": "Tarayıcı GPS / cihaz konumu"}
             st.success(msg)
+            st.session_state.harita_refresh_id = st.session_state.get("harita_refresh_id", 0) + 1
             st.rerun()
         else:
             st.warning(msg)
@@ -3008,6 +3004,7 @@ with st.expander("📱 Mobil Hızlı Panel / Sidebar görünmüyorsa burayı kul
                 "kaynak": "Mobil hızlı panel / operatör doğrulaması",
             }
             log_ekle("MOBIL_CBS", f"Mobil panelden koordinat işlendi: {ml:.6f}, {mn:.6f}")
+            st.session_state.harita_refresh_id = st.session_state.get("harita_refresh_id", 0) + 1
             st.rerun()
         except Exception:
             st.error("Enlem ve boylam sayısal olmalı. Örnek: 41.002700 / 39.716800")
@@ -3030,6 +3027,13 @@ st.markdown("---")
 
 # HARİTA TAM EKRAN (Stefan Kutusu Silindi) - BOYUT VE KATMANLAR KORUNDU
 st.subheader("🗺️ Katman Kontrollü CBS Haritası")
+mapc1, mapc2 = st.columns([3, 1])
+with mapc1:
+    st.caption(f"Harita merkezi: {float(enlem):.6f}, {float(boylam):.6f} | Kaynak: {st.session_state.get('son_konum_kaynagi', '')}")
+with mapc2:
+    if st.button("🔄 Haritayı Güncelle", key="harita_guncelle_btn", use_container_width=True):
+        st.session_state.harita_refresh_id = st.session_state.get("harita_refresh_id", 0) + 1
+        st.rerun()
 m = folium.Map(location=[enlem, boylam], zoom_start=14, tiles=None)
 
 folium.TileLayer("OpenStreetMap", name="Sokak Haritası").add_to(m)
@@ -3108,7 +3112,8 @@ for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("so
         pass
 
 folium.LayerControl().add_to(m)
-st_folium(m, use_container_width=True, height=500)
+map_dynamic_key = f"gridai_map_{round(float(enlem),6)}_{round(float(boylam),6)}_{len(heat_points)}_{len(supabase_kayitlar)}_{st.session_state.get('harita_refresh_id',0)}"
+st_folium(m, use_container_width=True, height=500, key=map_dynamic_key)
 
 st.markdown("### 🔮 5 Günlük Hava Tahmini (Open-Meteo)")
 st.caption("MGM entegrasyonu opsiyoneldir: resmi/kurumsal MGM veri erişimi sağlanırsa bu blok aynı tasarım korunarak MGM adaptörüne bağlanabilir. Şimdilik jüri demosunda kararlı çalışması için Open-Meteo kullanılır.")
