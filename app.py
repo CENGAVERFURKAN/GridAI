@@ -49,7 +49,23 @@ except Exception:
 # ==========================================
 # ⚡ 1. ARAYÜZ VE TEMA (İkon Gizleme & CSS)
 # ==========================================
-st.set_page_config(page_title="GridAI | DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="GridAI | DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU", page_icon="⚡", layout="wide",
+    initial_sidebar_state='expanded'
+)
+
+
+st.markdown('\n/* === GridAI Sidebar Açılabilirlik Düzeltmesi V7.4.5 ===\n   Amaç: Kullanıcı sol sidebar\'ı kapatsa bile Streamlit\'in açma oku/menü kontrolü görünür kalsın.\n*/\n<style>\n[data-testid="collapsedControl"],\n[data-testid="stSidebarCollapsedControl"] {\n    display: flex !important;\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n    z-index: 999999 !important;\n}\nbutton[kind="header"],\nheader button,\n[data-testid="stHeader"] button {\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n}\n[data-testid="stSidebar"] {\n    z-index: 9999 !important;\n}\n.gridai-sidebar-help {\n    position: fixed;\n    left: 10px;\n    bottom: 12px;\n    z-index: 999998;\n    background: rgba(0, 75, 50, 0.92);\n    color: white;\n    padding: 8px 10px;\n    border-radius: 999px;\n    font-size: 12px;\n    box-shadow: 0 6px 20px rgba(0,0,0,0.20);\n}\n@media (max-width: 768px) {\n    .gridai-sidebar-help {\n        font-size: 11px;\n        padding: 7px 9px;\n    }\n}\n</style>\n', unsafe_allow_html=True)
+
+
+# === GridAI Ana Ekran Hızlı Menü Yedek Alanı V7.4.5 ===
+try:
+    with st.expander("☰ Menü kapandıysa buradan devam et", expanded=False):
+        st.info("Sol menüyü kapattıysan sol üstteki küçük oka/☰ simgesine basarak tekrar açabilirsin. Kayıt sırasında panik olmamak için bu yedek alan eklendi.")
+        st.caption("Jüri kayıt akışı: Görsel yükle/kamera → analiz → FieldSense → PDF/Excel çıktı → arşiv.")
+except Exception:
+    pass
+
+st.markdown('\n<div class="gridai-sidebar-help">☰ Menü kapandıysa sol üstteki oku kullan</div>\n', unsafe_allow_html=True)
 
 st.markdown("""
 <style>
