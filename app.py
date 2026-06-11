@@ -49,7 +49,7 @@ except Exception:
 # ==========================================
 # ⚡ 1. ARAYÜZ VE TEMA (İkon Gizleme & CSS)
 # ==========================================
-st.set_page_config(page_title="GridAI Panel", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="GridAI | DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -1254,12 +1254,67 @@ def ariza_sinifi_katsayisi(anomali):
     return 0.60
 
 
+def _guven_0_100(guven):
+    """Roboflow/YOLO güven değerini 0-100 aralığına normalize eder."""
+    try:
+        g = float(guven or 0)
+    except Exception:
+        g = 0.0
+    if 0 < g <= 1:
+        g *= 100
+    return max(0.0, min(100.0, g))
+
+
+def risk_seviyesi_etiketi(risk):
+    """Risk skoru ekranda anlaşılır görünsün: yüksek skor = daha acil."""
+    try:
+        r = float(risk or 0)
+    except Exception:
+        r = 0.0
+    if r >= 85:
+        return "ACİL", "#DC2626", "Acil saha doğrulama"
+    if r >= 65:
+        return "YÜKSEK", "#F97316", "Öncelikli kontrol"
+    if r >= 40:
+        return "ORTA", "#EAB308", "Planlı izleme"
+    return "DÜŞÜK", "#16A34A", "Rutin takip"
+
+
+def risk_skoru_html(risk, baslik="Risk Öncelik Skoru"):
+    """Streamlit için renkli risk kartı. AI güveniyle karıştırılmaması için 'öncelik' ifadesi kullanılır."""
+    try:
+        r = float(risk or 0)
+    except Exception:
+        r = 0.0
+    etiket, renk, aciklama = risk_seviyesi_etiketi(r)
+    return f"""
+    <div style="background:#0F172A; border:1px solid {renk}; border-radius:14px; padding:14px; margin:8px 0;">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div>
+          <div style="color:#94A3B8; font-size:12px; font-weight:800; letter-spacing:.3px;">{baslik}</div>
+          <div style="color:{renk}; font-size:32px; font-weight:900; line-height:1;">%{r:.1f}</div>
+        </div>
+        <div style="background:{renk}; color:white; padding:9px 13px; border-radius:999px; font-weight:900;">{etiket}</div>
+      </div>
+      <div style="height:10px; background:#1E293B; border-radius:999px; overflow:hidden; margin-top:10px;">
+        <div style="width:{max(0,min(100,r)):.1f}%; height:10px; background:{renk};"></div>
+      </div>
+      <div style="color:#CBD5E1; font-size:12px; margin-top:8px;">{aciklama}. Not: Bu değer AI güven skoru değil, bakım öncelik/risk skorudur.</div>
+    </div>
+    """
+
+
 def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
-    """Tespit sınıfı + model güveni + canlı metrikler + veri güvenilirliği ile kontrollü risk skoru."""
-    try: guven = float(guven or 0)
-    except Exception: guven = 0
-    try: veri_guven_puani = float(veri_guven_puani or 55)
-    except Exception: veri_guven_puani = 55
+    """Tespit sınıfı + çevresel koşul + veri güveni ile bakım öncelik/risk skoru üretir.
+
+    Önemli: Bu skor AI güveni değildir. Kırık izolatör gibi kritik sınıflar tespit edildiğinde
+    skor düşük görünmemelidir; acil durumlar 100'e yakın başlar ve şartlara göre azalır.
+    """
+    guven = _guven_0_100(guven)
+    try:
+        veri_guven_puani = float(veri_guven_puani or 55)
+    except Exception:
+        veri_guven_puani = 55
     hava = hava or {}
     try:
         ruzgar = float(hava.get("ruzgar", 0) or 0)
@@ -1268,24 +1323,54 @@ def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
         yildirim = float(hava.get("yildirim", 0) or 0)
     except Exception:
         ruzgar = nem = sicaklik = yildirim = 0
-    ad = str(anomali or "").lower()
-    if "normal" in ad or "risk yok" in ad or "arıza tespiti yok" in ad or "ariza tespiti yok" in ad or "analiz yok" in ad or not ad.strip():
-        base = 15
+
+    ad = str(anomali or "").lower().strip()
+    normal = (not ad) or any(k in ad for k in ["normal", "risk yok", "arıza tespiti yok", "ariza tespiti yok", "analiz yok", "saha unsuru algılandı"])
+    if normal:
+        cevre = 0
+        if ruzgar >= 35: cevre += 5
+        elif ruzgar >= 20: cevre += 3
+        if yildirim >= 40: cevre += 5
+        elif yildirim >= 15: cevre += 2
+        skor = 8 + cevre + max(0, 60 - veri_guven_puani) * 0.12
+        return round(max(1, min(30, skor)), 1)
+
+    # Kritik sınıflar: tespit varsa bakım önceliği düşük görünmemeli.
+    kritik = any(k in ad for k in ["kır", "kir", "broken", "çatlak", "catlak", "crack", "kopuk", "yanık", "yanik", "kaçak", "kacak", "ark", "arc", "gevş", "gevsek", "hasar", "arıza", "ariza", "fault"])
+    vejetasyon = any(k in ad for k in ["vejet", "veget", "ağaç", "agac", "tree"])
+    korozyon = any(k in ad for k in ["korozy", "corrosion", "pas"])
+    ekipman = any(k in ad for k in ["izolat", "insulator", "travers", "bağlant", "baglant", "direk", "pole", "iletken", "hat"])
+
+    if kritik:
+        skor = 88
+    elif vejetasyon:
+        skor = 72
+    elif korozyon:
+        skor = 62
+    elif ekipman:
+        skor = 48
     else:
-        base = ariza_sinifi_katsayisi(anomali) * 55
-    cevre = 0
-    if ruzgar >= 35: cevre += 12
-    elif ruzgar >= 20: cevre += 7
-    if nem >= 80: cevre += 6
-    elif nem >= 65: cevre += 3
-    if sicaklik >= 34: cevre += 5
-    if yildirim >= 40: cevre += 8
-    elif yildirim >= 15: cevre += 4
-    if glint_var: cevre -= 6
-    skor = base + (guven * 0.25) + cevre + (veri_guven_puani * 0.08)
-    if "normal" in ad or "risk yok" in ad or "arıza tespiti yok" in ad or "ariza tespiti yok" in ad:
-        skor = min(skor, 30)
-    return round(max(5, min(95, skor)), 1)
+        skor = 42
+
+    # Model güveni sadece ince ayar yapar; kritik tespiti %4 gibi göstermemek için ana belirleyici sınıf şiddetidir.
+    skor += (guven - 50) * 0.10
+    if veri_guven_puani >= 85:
+        skor += 4
+    elif veri_guven_puani < 60:
+        skor -= 5
+    if ruzgar >= 35: skor += 8
+    elif ruzgar >= 20: skor += 4
+    if nem >= 80: skor += 3
+    if sicaklik >= 34: skor += 3
+    if yildirim >= 40: skor += 6
+    elif yildirim >= 15: skor += 3
+    if glint_var: skor -= 4
+
+    if kritik:
+        skor = max(85, skor)
+    elif vejetasyon:
+        skor = max(65, skor)
+    return round(max(1, min(100, skor)), 1)
 
 
 def heatmap_agirligi_hesapla(analiz):
@@ -1468,7 +1553,7 @@ def gorsel_analiz_pipeline(dosya_adi, image_bytes, enlem, boylam, adres_detay, h
         "guven": yolo_sonuc.get("guven", 0) if yolo_sonuc else 0, "sicaklik": yolo_sonuc.get("sicaklik", 0) if yolo_sonuc else 0,
         "kaynak": yolo_sonuc.get("kaynak", "Yok") if yolo_sonuc else "Yok", "predictions": yolo_sonuc.get("predictions", []) if yolo_sonuc else [],
         "glint": bool(glint_var), "glint_oran": round(float(glint_oran), 2), "glint_detay": glint_sonuc.get("detay", ""), "mesafe_px": mesafe,
-        "risk_skoru": round(float(risk_skor), 1), "tavsiye": analiz_tavsiyesi(yolo_sonuc.get("anomali", "Analiz yok") if yolo_sonuc else "Analiz yok", float(risk_skor), bool(glint_var)),
+        "risk_skoru": round(float(risk_skor), 1), "risk_seviyesi": risk_seviyesi_etiketi(risk_skor)[0], "tavsiye": analiz_tavsiyesi(yolo_sonuc.get("anomali", "Analiz yok") if yolo_sonuc else "Analiz yok", float(risk_skor), bool(glint_var)),
         "ai_detay": ai_detayini_guvenle_guncelle(temel_ai, veri_notu, analiz_kaynagi), "gorsel_b64": base64.b64encode(image_bytes).decode("utf-8"), "islenmis_b64": pil_to_b64_png(annotated),
         "hava_analiz": analiz_hava,
     }
@@ -1773,6 +1858,7 @@ def analizleri_yeniden_hesapla(analiz, yeni_hava=None, yildirim=None):
     analiz['hava_analiz'] = h
     risk = risk_skoru_hesapla(analiz.get('anomali'), analiz.get('guven'), h, analiz.get('glint'), analiz.get('veri_guven_puani'))
     analiz['risk_skoru'] = risk
+    analiz['risk_seviyesi'] = risk_seviyesi_etiketi(risk)[0]
     analiz['tavsiye'] = analiz_tavsiyesi(analiz.get('anomali'), risk, analiz.get('glint'))
     temel_ai = ai_detayli_analiz_uret(analiz.get('anomali'), float(risk), bool(analiz.get('glint')), h, analiz.get('sicaklik', 0))
     analiz['ai_detay'] = ai_detayini_guvenle_guncelle(temel_ai, analiz.get('veri_guven_notu',''), analiz.get('analiz_kaynagi',''))
@@ -2866,7 +2952,7 @@ top_logo_col, top_title_col = st.columns([1, 3])
 with top_logo_col:
     gridai_logo_goster(width=260)
 with top_title_col:
-    st.title("⚡ Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu")
+    st.title("⚡ DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.")
 
 with st.expander("🎬 Sunum kaydı için hızlı kontrol", expanded=False):
     st.markdown("""
@@ -3084,7 +3170,7 @@ if secim == "Görsel Ekle":
     if aktif_analizler:
         st.info("Aşağıdaki tüm analizler PDF rapora, SAP Excel'e, arşiv Excel'e ve harita tespit noktalarına dahil edilir.")
         for idx, analiz in enumerate(aktif_analizler, start=1):
-            with st.expander(f"#{idx} {analiz['dosya']} | Hash: {analiz['hash_kisa']} | Risk: %{analiz['risk_skoru']}", expanded=(idx == len(aktif_analizler))):
+            with st.expander(f"#{idx} {analiz['dosya']} | Hash: {analiz['hash_kisa']} | Risk: %{analiz['risk_skoru']} {analiz.get('risk_seviyesi','')}", expanded=(idx == len(aktif_analizler))):
                 c_img, c_res = st.columns([1, 1])
                 with c_img:
                     st.image(Image.open(io.BytesIO(base64.b64decode(analiz.get("islenmis_b64") or analiz["gorsel_b64"]))), width=400)
@@ -3107,7 +3193,8 @@ if secim == "Görsel Ekle":
                     else:
                         st.info(f"✅ OpenCV Akıllı Glint: Baskın yansıma yok (Skor: %{analiz['glint_oran']})")
                     st.caption(analiz.get("glint_detay", ""))
-                    st.error(f"🚨 **Risk Skoru:** %{analiz['risk_skoru']} (Rüzgar, tespit güveni ve görüntü kalitesi birlikte değerlendirildi)")
+                    st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Öncelik / Risk Skoru"), unsafe_allow_html=True)
+                    st.caption("AI güven skoru ayrı, bakım öncelik/risk skoru ayrıdır. Örneğin kırık izolatör gibi kritik tespitlerde risk skoru yüksek gösterilir.")
                     st.markdown(f"**AI Bakım Tavsiyesi:** {analiz['tavsiye']}")
                     st.markdown(f"**AI Detaylı Açıklama:** {analiz['ai_detay']}")
 
@@ -3268,7 +3355,7 @@ elif secim == "Mobil Saha Terminali":
             st.write(f"**Hash:** `{analiz['hash']}`")
             st.write(f"**Konum:** {analiz['lat']:.6f}, {analiz['lon']:.6f} — {analiz.get('konum_kaynagi','')}")
             st.write(f"**Veri Güvenilirliği:** {analiz.get('veri_guvenilirligi','')} / {analiz.get('veri_guven_puani','')} — {analiz.get('veri_guven_notu','')}")
-            st.error(f"🚨 **Risk Skoru:** %{analiz['risk_skoru']}")
+            st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Öncelik / Risk Skoru"), unsafe_allow_html=True)
             st.markdown(f"**AI Bakım Tavsiyesi:** {analiz['tavsiye']}")
         mobil_fieldsense_sonuc_goster(analiz, analiz.get("hava_analiz", hava))
         if st.button("🗺️ Mobil Analizi Haritaya İşle", key="mobil_analiz_harita_isle_btn"):
@@ -3482,12 +3569,12 @@ if panel:
     else:
         baslik = "☎️ İletişim"
         telefon_iletisim = _secret_get("CONTACT_PHONE", "Telefon numarası Secrets > CONTACT_PHONE alanına eklenecek")
-        icerik = f"<p>📞 <b>Telefon:</b> {telefon_iletisim}</p><p>📷 <b>Instagram:</b> @gridai_official</p><p>✉️ <b>E-posta:</b> cfa6161@gmail.com</p><p><b>Proje:</b> GridAI - Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Analiz Sistemi</p>"
+        icerik = f"<p>📞 <b>Telefon:</b> {telefon_iletisim}</p><p>📷 <b>Instagram:</b> @gridai_official</p><p>✉️ <b>E-posta:</b> cfa6161@gmail.com</p><p><b>Proje:</b> GridAI - DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.</p>"
     st.markdown(f"""
     <div class="gridai-card">
         <h3 style="margin-top:0; color:#38BDF8 !important;">{baslik}</h3>
         {icerik}
-        <small style="color:#CBD5E1;">Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu</small>
+        <small style="color:#CBD5E1;">DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.</small>
     </div>
     """, unsafe_allow_html=True)
 
@@ -3495,5 +3582,5 @@ if panel:
 # Böylece Cloud tarafında HTML kodu düz metin olarak görünmez ve React/DOM çakışması oluşmaz.
 st.markdown("---")
 st.markdown("### ⚡ GridAI")
-st.caption("Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu")
+st.caption("DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.")
 st.caption("GridAI MVP Platformu · Jüri Kayıt Final · © 2026 GridAI Enterprise. Tüm hakları saklıdır.")
