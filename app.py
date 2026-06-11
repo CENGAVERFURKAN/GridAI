@@ -49,7 +49,7 @@ except Exception:
 # ==========================================
 # ⚡ 1. ARAYÜZ VE TEMA (İkon Gizleme & CSS)
 # ==========================================
-st.set_page_config(page_title="GridAI | DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="GridAI | DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU", page_icon="⚡", layout="wide")
 
 st.markdown("""
 <style>
@@ -1205,7 +1205,7 @@ def ai_detayli_analiz_uret(anomali, risk_skoru, glint_var, hava, sicaklik):
         metrik = "Canlı çevresel metrikler görsel bulguyla birlikte karar destek amacıyla kullanılır."
     yildirim_notu = "Yıldırım aktivitesi yüksekse parafudr/topraklama ve izolatör yüzey kontrolü önceliklendirilebilir." if float(hava.get("yildirim", 0) or 0) >= 40 else ""
     glint_notu = "Görüntüde yansıma/parlama olasılığı bulunduğundan model çıktısı ikinci açıdan doğrulanmalıdır." if glint_var else "Görüntüde baskın yansıma tespit edilmedi."
-    return f"{tanim} Canlı metrikler: ortam {ortam:.1f} °C, nem %{nem:.0f}, rüzgâr {ruzgar:.1f} km/s. {metrik} {yildirim_notu} Risk skoru %{risk_skoru:.1f} seviyesindedir. {glint_notu}"
+    return f"{tanim} Canlı metrikler: ortam {ortam:.1f} °C, nem %{nem:.0f}, rüzgâr {ruzgar:.1f} km/s. {metrik} {yildirim_notu} Bakım durumu sistem tarafından önceliklendirilmiştir. {glint_notu}"
 
 
 def veri_guvenilirligi_hesapla(konum_kaynagi, analiz_kaynagi, gps_accuracy=None):
@@ -1266,7 +1266,7 @@ def _guven_0_100(guven):
 
 
 def risk_seviyesi_etiketi(risk):
-    """Risk skoru ekranda anlaşılır görünsün: yüksek skor = daha acil."""
+    """Bakım durumu ekranda anlaşılır görünsün: yüksek iç öncelik = daha acil."""
     try:
         r = float(risk or 0)
     except Exception:
@@ -1280,8 +1280,8 @@ def risk_seviyesi_etiketi(risk):
     return "DÜŞÜK", "#16A34A", "Rutin takip"
 
 
-def risk_skoru_html(risk, baslik="Risk Öncelik Skoru"):
-    """Streamlit için renkli risk kartı. AI güveniyle karıştırılmaması için 'öncelik' ifadesi kullanılır."""
+def risk_skoru_html(risk, baslik="Bakım Durumu"):
+    """Streamlit için sade bakım durumu kartı. Ek analiz yüzdesi göstermez."""
     try:
         r = float(risk or 0)
     except Exception:
@@ -1292,23 +1292,20 @@ def risk_skoru_html(risk, baslik="Risk Öncelik Skoru"):
       <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
         <div>
           <div style="color:#94A3B8; font-size:12px; font-weight:800; letter-spacing:.3px;">{baslik}</div>
-          <div style="color:{renk}; font-size:32px; font-weight:900; line-height:1;">%{r:.1f}</div>
+          <div style="color:{renk}; font-size:28px; font-weight:900; line-height:1.1;">{etiket}</div>
         </div>
-        <div style="background:{renk}; color:white; padding:9px 13px; border-radius:999px; font-weight:900;">{etiket}</div>
+        <div style="background:{renk}; color:white; padding:9px 13px; border-radius:999px; font-weight:900;">{aciklama}</div>
       </div>
-      <div style="height:10px; background:#1E293B; border-radius:999px; overflow:hidden; margin-top:10px;">
-        <div style="width:{max(0,min(100,r)):.1f}%; height:10px; background:{renk};"></div>
-      </div>
-      <div style="color:#CBD5E1; font-size:12px; margin-top:8px;">{aciklama}. Not: Bu değer AI güven skoru değil, bakım öncelik/risk skorudur.</div>
+      <div style="color:#CBD5E1; font-size:12px; margin-top:8px;">Yüzdelik genel skor üstteki Genel Elektrik Hattı Sağlık Skoru panelinde verilir. Bu kart yalnızca bakım durumunu gösterir.</div>
     </div>
     """
 
 
 def risk_skoru_hesapla(anomali, guven, hava, glint_var, veri_guven_puani):
-    """Tespit sınıfı + çevresel koşul + veri güveni ile bakım öncelik/risk skoru üretir.
+    """Tespit sınıfı + çevresel koşul + veri güveni ile dahili bakım önceliği üretir.
 
     Önemli: Bu skor AI güveni değildir. Kırık izolatör gibi kritik sınıflar tespit edildiğinde
-    skor düşük görünmemelidir; acil durumlar 100'e yakın başlar ve şartlara göre azalır.
+    dahili öncelik düşük görünmemelidir; acil durumlar yüksek öncelik alır.
     """
     guven = _guven_0_100(guven)
     try:
@@ -1476,7 +1473,7 @@ def sesli_komut_bileseni():
     elif aktif_komut in ["Kamera aç", "Görüntü al"]:
         st.success("📷 Kamera adımı: Aşağıdaki mobil kamera alanından fotoğraf çekin. Görsel analiz kuyruğuna alınır ve otomatik analiz edilir.")
     elif aktif_komut == "Analiz yap":
-        st.success("🤖 Analiz adımı: Fotoğraf çekildiyse Roboflow/YOLO tespiti, sade kutu çizimi ve risk skoru kontrol edilir.")
+        st.success("🤖 Analiz adımı: Fotoğraf çekildiyse Roboflow/YOLO tespiti, sade kutu çizimi ve bakım durumu kontrol edilir.")
     elif aktif_komut == "PDF indir":
         st.success("📄 PDF adımı: Son analiz varsa çıktı bölümünden rapor indirilebilir.")
     elif aktif_komut == "Arşive kaydet":
@@ -1531,7 +1528,7 @@ def gorsel_analiz_pipeline(dosya_adi, image_bytes, enlem, boylam, adres_detay, h
         yolo_sonuc["predictions"] = tum_preds
         gercek_preds = [p for p in ana_preds if not _yardimci_sahne_mi(p)]
         if gercek_preds:
-            # AI yorumu ve risk skoru yalnızca Roboflow/gerçek model tespitini baz alır.
+            # AI yorumu ve bakım durumu yalnızca Roboflow/gerçek model tespitini baz alır.
             top = max(gercek_preds, key=lambda x: float(x.get("confidence", 0) or 0))
             yolo_sonuc["anomali"] = top.get("class", yolo_sonuc.get("anomali", "Tespit"))
             yolo_sonuc["guven"] = top.get("confidence", yolo_sonuc.get("guven", 0))
@@ -1586,7 +1583,7 @@ def sap_excel_olustur(vp, analizler):
             "Koordinat": f"{a.get('lat')},{a.get('lon')}",
             "Ariza_Tanimi": a.get("anomali", ""),
             "Guven_%": a.get("guven", 0),
-            "Risk_%": a.get("risk_skoru", 0),
+            "Bakim_Durumu": a.get("risk_seviyesi", ""),
             "Tahmini_Sicaklik_C": a.get("sicaklik", 0),
             "Gorsel_Hash": a.get("hash", ""),
             "Konum_Kaynagi": a.get("konum_kaynagi", ""),
@@ -1608,7 +1605,7 @@ def sap_excel_olustur(vp, analizler):
             "Koordinat": f"{vp.get('enlem')},{vp.get('boylam')}",
             "Ariza_Tanimi": "Görsel analiz bekleniyor",
             "Guven_%": 0,
-            "Risk_%": 0,
+            "Bakim_Durumu": "Görsel analiz bekleniyor",
             "Tahmini_Sicaklik_C": vp.get("sicaklik", 0),
             "Gorsel_Hash": "",
             "Onerilen_Aksiyon": "Görsel yüklenip Roboflow/YOLO analizi yapılmalıdır.",
@@ -1642,7 +1639,7 @@ def arsiv_excel_olustur(db):
                 "Dosya": a.get("dosya", ""),
                 "Hash": a.get("hash", ""),
                 "Anomali": a.get("anomali", ""),
-                "Risk": a.get("risk_skoru", ""),
+                "Bakim_Durumu": a.get("risk_seviyesi", ""),
                 "Enlem": a.get("lat", ""),
                 "Boylam": a.get("lon", ""),
                 "Tarih": a.get("tarih", ""),
@@ -1813,7 +1810,7 @@ def hava_durumu_tarih_konum_cek(lat, lon, cekim_tarihi=None):
     return h
 
 def ekipman_saglik_skoru(analizler, vp):
-    """Genel elektrik hattı sağlık skoru: 100 iyi, 0 kritik."""
+    """Genel elektrik hattı sağlık skoru: 100 sağlıklı, 0 kritik."""
     analizler = analizler or []
     if analizler:
         max_risk = max(float(a.get('risk_skoru', 0) or 0) for a in analizler)
@@ -1878,7 +1875,7 @@ def stefan_boltzmann_hesapla(vp):
     termal_var = bool(vp.get('termal_veri_var', False))
     ekip_c = float(vp.get("sicaklik", ortam_c) or ortam_c)
     if not termal_var:
-        return {"uygun": False, "sigma": sigma, "epsilon": eps, "ortam_c": ortam_c, "ekip_c": None, "T": None, "T0": ortam_c+273.15, "q": None, "risk": None, "yorum": "Harici/manuel termal veri girilmedi. Stefan-Boltzmann ısınma hesabı kesin risk skoru üretmez; termal kamera veya saha ekipman sıcaklığı girilirse hesap otomatik yapılır."}
+        return {"uygun": False, "sigma": sigma, "epsilon": eps, "ortam_c": ortam_c, "ekip_c": None, "T": None, "T0": ortam_c+273.15, "q": None, "risk": None, "yorum": "Harici/manuel termal veri girilmedi. Stefan-Boltzmann ısınma hesabı kesin ısıl karar üretmez; termal kamera veya saha ekipman sıcaklığı girilirse hesap otomatik yapılır."}
     akim = float(vp.get("akim", 0) or 0)
     T = ekip_c + 273.15
     T0 = ortam_c + 273.15
@@ -1967,7 +1964,7 @@ def katener_grafik_png_buf(kt, width=680, height=250):
     midx = (x0 + x1) / 2
     d.line([midx, y_mid, midx, y_mid+sag_px], fill="#EF4444", width=3)
     d.text((midx+8, y_mid+sag_px/2-8), f"~{sag:.2f} m", fill="#EF4444", font=font_s)
-    d.text((x0, height-34), f"Açıklık: {L:.0f} m | Risk: %{kt.get('risk','-')} | Karar destek amaçlıdır", fill="#334155", font=font_s)
+    d.text((x0, height-34), f"Açıklık: {L:.0f} m | Sehim durumu: karar destek | Karar destek amaçlıdır", fill="#334155", font=font_s)
     img.save(buf, format="PNG")
     buf.seek(0)
     return buf
@@ -2636,7 +2633,7 @@ def genis_pdf_olustur(path, vp):
     if vp.get('analizler'):
         saglik = ekipman_saglik_skoru(vp.get('analizler', []), vp)
         saglik_durum = saglik_skoru_durumu(saglik)
-        story.append(Paragraph(f"Genel sağlık skoru: <b>%{saglik}</b> - <b>{saglik_durum}</b>. Skor; en yüksek görsel risk, konum/veri güvenilirliği ve yıldırım önceliği birlikte değerlendirilerek oluşturulmuş karar destek göstergesidir.", body))
+        story.append(Paragraph(f"Genel sağlık skoru: <b>%{saglik}</b> - <b>{saglik_durum}</b>. %100 sağlıklı, %0 kritik anlamına gelir. Skor; görsel bulgu, konum/veri güvenilirliği ve yıldırım önceliği birlikte değerlendirilerek oluşturulmuş karar destek göstergesidir.", body))
     else:
         story.append(Paragraph("Henüz görsel/Roboflow analizi olmadığı için elektrik hattı sağlık skoru hesaplanmadı. Skor; en az bir doğrulanmış görsel analizi sonrasında üretilecektir.", body))
     story.append(Spacer(1, 16))
@@ -2665,7 +2662,7 @@ def genis_pdf_olustur(path, vp):
             [Paragraph("Formül", bold), Paragraph("q = ε · σ · (T⁴ - T₀⁴)", body)],
             [Paragraph("Semboller", bold), Paragraph("q: radyatif ısı akısı farkı, ε: yüzey yayınım katsayısı, σ: Stefan-Boltzmann sabiti, T: harici/manuel ekipman sıcaklığı (K), T₀: ortam sıcaklığı (K).", body)],
             [Paragraph("Hesap", bold), Paragraph(f"ε={sb['epsilon']}, σ={sb['sigma']:.3e}, T={sb['T']:.2f} K, T₀={sb['T0']:.2f} K, q≈{sb['q']:.2f} W/m²", body)],
-            [Paragraph("Risk", bold), Paragraph(f"Donanımsız ısınma risk skoru: %{sb['risk']}. {sb['yorum']}", body)],
+            [Paragraph("Isıl Durum", bold), Paragraph(f"{sb['yorum']}", body)],
         ]
     t_sb = Table(sb_rows, colWidths=[100, 410]); t_sb.setStyle(TableStyle([("GRID",(0,0),(-1,-1),0.5,colors.lightgrey), ("VALIGN",(0,0),(-1,-1),"TOP"), ("PADDING",(0,0),(-1,-1),7)])); story.append(t_sb)
     story.append(Spacer(1, 16))
@@ -2678,7 +2675,7 @@ def genis_pdf_olustur(path, vp):
             [Paragraph("Formül", bold), Paragraph("f ≈ (w · L²) / (8 · H)", body)],
             [Paragraph("Semboller", bold), Paragraph("f: yaklaşık sehim, w: birim açıklık yükü, L: açıklık mesafesi, H: yatay çekme kuvveti. Basitleştirilmiş katener/parabol yaklaşımıdır.", body)],
             [Paragraph("Hesap", bold), Paragraph(f"L={kt['L']:.1f} m, w={kt['w']:.2f} N/m, H={kt['H']:.0f} N, teorik f≈{kt['f']:.2f} m, düzeltilmiş f≈{kt['f_duzeltilmis']:.2f} m", body)],
-            [Paragraph("Risk", bold), Paragraph(f"Donanımsız sehim risk skoru: %{kt['risk']}. {kt['yorum']}", body)],
+            [Paragraph("Sehim Durumu", bold), Paragraph(f"{kt['yorum']}", body)],
         ]
     t_kt = Table(kt_rows, colWidths=[100, 410]); t_kt.setStyle(TableStyle([("GRID",(0,0),(-1,-1),0.5,colors.lightgrey), ("VALIGN",(0,0),(-1,-1),"TOP"), ("PADDING",(0,0),(-1,-1),7)])); story.append(t_kt)
     story.append(PageBreak())
@@ -2700,7 +2697,7 @@ def genis_pdf_olustur(path, vp):
                 [Paragraph("Görsel Hava Verisi", bold), Paragraph(f"{ah.get('temp','')} °C, nem %{ah.get('nem','')}, rüzgâr {ah.get('ruzgar','')} km/s - {ah.get('veri_kaynagi','')}", body)],
                 [Paragraph("Veri Güvenilirliği", bold), Paragraph(f"{a.get('veri_guvenilirligi','')} / {a.get('veri_guven_puani','')} - {a.get('veri_guven_notu','')}", body)],
                 [Paragraph("Tespit", bold), Paragraph(f"{a.get('anomali')} - Güven %{a.get('guven')}", body)],
-                [Paragraph("Risk", bold), Paragraph(f"%{a.get('risk_skoru')} | Glint: {'Var' if a.get('glint') else 'Yok'}", body)],
+                [Paragraph("Bakım Durumu", bold), Paragraph(f"{a.get('risk_seviyesi','')} | Glint: {'Var' if a.get('glint') else 'Yok'}", body)],
                 [Paragraph("AI Tavsiye", bold), Paragraph(a.get("tavsiye", ""), body)],
                 [Paragraph("AI Detaylı Yorum", bold), Paragraph(a.get("ai_detay", ""), body)],
             ]
@@ -2806,7 +2803,7 @@ with st.sidebar:
         st.session_state.hat_sicakligi = float(secilen_sicaklik)
     else:
         st.session_state.hat_sicakligi = 0.0
-        st.caption("Termal veri yoksa Stefan-Boltzmann hesabı risk skoru üretmez; raporda 'termal veri bekleniyor' olarak gösterilir.")
+        st.caption("Termal veri yoksa ısıl değerlendirme raporda 'termal veri bekleniyor' olarak gösterilir.")
     tahmini_hat_akimi = st.slider("Tahmini Hat Akımı (A)", 10, 1200, 420)
     st.session_state.katener_hesabi_uygun = st.checkbox("Katener/sehim hesabı için hat açıklığı görselde uygun", value=bool(st.session_state.get("katener_hesabi_uygun", False)))
     if st.session_state.katener_hesabi_uygun:
@@ -2952,7 +2949,7 @@ top_logo_col, top_title_col = st.columns([1, 3])
 with top_logo_col:
     gridai_logo_goster(width=260)
 with top_title_col:
-    st.title("⚡ DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.")
+    st.title("⚡ DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU")
 
 with st.expander("🎬 Sunum kaydı için hızlı kontrol", expanded=False):
     st.markdown("""
@@ -3009,9 +3006,9 @@ analiz_saglik_listesi = st.session_state.get("gorsel_kuyrugu", []) or st.session
 if analiz_saglik_listesi:
     mevcut_saglik = ekipman_saglik_skoru(analiz_saglik_listesi, {"yildirim": yildirim})
     mevcut_saglik_durum = saglik_skoru_durumu(mevcut_saglik)
-    st.markdown(f"<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:28px; font-weight:900;'>%{mevcut_saglik}</div><div style='font-size:13px; font-weight:800;'>{mevcut_saglik_durum}</div><div style='font-size:12px;'>Roboflow tespiti, risk skoru, veri güvenilirliği ve yıldırım önceliğiyle hesaplanır.</div></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:28px; font-weight:900;'>%{mevcut_saglik}</div><div style='font-size:13px; font-weight:800;'>{mevcut_saglik_durum}</div><div style='font-size:12px;'>Roboflow tespiti, veri güvenilirliği, bakım durumu ve yıldırım önceliğiyle hesaplanır. %100 sağlıklı, %0 kritik anlamına gelir.</div></div>", unsafe_allow_html=True)
 else:
-    st.markdown("<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:24px; font-weight:900;'>Analiz bekleniyor</div><div style='font-size:12px;'>Skor, en az bir görsel Roboflow/OpenCV analizinden sonra hesaplanır. Veri yokken skor üretilmez.</div></div>", unsafe_allow_html=True)
+    st.markdown("<div class='health-score'><div style='font-size:13px;'>⚕️ Genel Elektrik Hattı Sağlık Skoru</div><div style='font-size:24px; font-weight:900;'>Analiz bekleniyor</div><div style='font-size:12px;'>Skor, en az bir görsel Roboflow/OpenCV analizinden sonra hesaplanır. %100 sağlıklı, %0 kritik anlamına gelir.</div></div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -3042,7 +3039,7 @@ for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("so
 if heat_points:
     HeatMap(heat_points, name="Risk Ağırlıklı Isı Haritası", radius=22, blur=16, min_opacity=0.25).add_to(m)
 else:
-    st.caption("Isı haritası, analiz yapılan görsellerin risk skoru + arıza sınıfı + veri güvenilirliğiyle oluşturulur. Henüz analiz noktası olmadığı için ısı katmanı boş.")
+    st.caption("Isı haritası, analiz yapılan görsellerin bakım durumu + arıza sınıfı + veri güvenilirliğiyle oluşturulur. Henüz analiz noktası olmadığı için ısı katmanı boş.")
 folium.Marker([enlem, boylam], popup=f"{adres_detay}", icon=folium.Icon(color="red", icon="bolt", prefix="fa")).add_to(m)
 
 for r in supabase_kayitlar:
@@ -3055,7 +3052,7 @@ for r in supabase_kayitlar:
         Cihaz: {r.get('cihaz_turu','')}<br>
         Tespit: {r.get('tespit','')}<br>
         Güven: %{r.get('guven',0)}<br>
-        Risk: %{r.get('risk_skoru',0)} ({r.get('risk_seviyesi','')})<br>
+        Bakım Durumu: {r.get('risk_seviyesi','')}<br>
         Konum Kaynağı: {r.get('konum_kaynagi','')}<br>
         Tarih: {str(r.get('created_at',''))[:19]}
         """
@@ -3078,7 +3075,7 @@ for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("so
         Hash: {a.get('hash_kisa','')}<br>
         Tespit: {a.get('anomali','')}<br>
         Güven: %{a.get('guven',0)}<br>
-        Risk: %{a.get('risk_skoru',0)}<br>
+        Bakım Durumu: {a.get('risk_seviyesi','')}<br>
         Konum Kaynağı: {a.get('konum_kaynagi','')}<br>
         Isı Ağırlığı: {heatmap_agirligi_hesapla(a)}
         """
@@ -3170,7 +3167,7 @@ if secim == "Görsel Ekle":
     if aktif_analizler:
         st.info("Aşağıdaki tüm analizler PDF rapora, SAP Excel'e, arşiv Excel'e ve harita tespit noktalarına dahil edilir.")
         for idx, analiz in enumerate(aktif_analizler, start=1):
-            with st.expander(f"#{idx} {analiz['dosya']} | Hash: {analiz['hash_kisa']} | Risk: %{analiz['risk_skoru']} {analiz.get('risk_seviyesi','')}", expanded=(idx == len(aktif_analizler))):
+            with st.expander(f"#{idx} {analiz['dosya']} | Hash: {analiz['hash_kisa']} | Durum: {analiz.get('risk_seviyesi','')}", expanded=(idx == len(aktif_analizler))):
                 c_img, c_res = st.columns([1, 1])
                 with c_img:
                     st.image(Image.open(io.BytesIO(base64.b64decode(analiz.get("islenmis_b64") or analiz["gorsel_b64"]))), width=400)
@@ -3193,8 +3190,8 @@ if secim == "Görsel Ekle":
                     else:
                         st.info(f"✅ OpenCV Akıllı Glint: Baskın yansıma yok (Skor: %{analiz['glint_oran']})")
                     st.caption(analiz.get("glint_detay", ""))
-                    st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Öncelik / Risk Skoru"), unsafe_allow_html=True)
-                    st.caption("AI güven skoru ayrı, bakım öncelik/risk skoru ayrıdır. Örneğin kırık izolatör gibi kritik tespitlerde risk skoru yüksek gösterilir.")
+                    st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Durumu"), unsafe_allow_html=True)
+                    st.caption("Genel Elektrik Hattı Sağlık Skoru üst panelde verilir; burada yalnızca bakım durumu gösterilir.")
                     st.markdown(f"**AI Bakım Tavsiyesi:** {analiz['tavsiye']}")
                     st.markdown(f"**AI Detaylı Açıklama:** {analiz['ai_detay']}")
 
@@ -3319,7 +3316,7 @@ elif secim == "Mobil Saha Terminali":
     st.markdown("""
     <div class='live-camera-box'>
       <h4>📷 Canlıya Yakın Mobil Kamera + Roboflow</h4>
-      Streamlit web kamerası kesintisiz video akışı yerine yakalanan kareyi anında işler. Fotoğraf çekildiği anda Roboflow/YOLO tespiti, kutu çizimi, FieldSense hesapları ve risk skoru otomatik gösterilir.
+      Streamlit web kamerası kesintisiz video akışı yerine yakalanan kareyi anında işler. Fotoğraf çekildiği anda Roboflow/YOLO tespiti, kutu çizimi, FieldSense hesapları ve bakım durumu otomatik gösterilir.
     </div>
     """, unsafe_allow_html=True)
     if st.session_state.get("mobil_ar_rehber_aktif", True):
@@ -3355,7 +3352,7 @@ elif secim == "Mobil Saha Terminali":
             st.write(f"**Hash:** `{analiz['hash']}`")
             st.write(f"**Konum:** {analiz['lat']:.6f}, {analiz['lon']:.6f} — {analiz.get('konum_kaynagi','')}")
             st.write(f"**Veri Güvenilirliği:** {analiz.get('veri_guvenilirligi','')} / {analiz.get('veri_guven_puani','')} — {analiz.get('veri_guven_notu','')}")
-            st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Öncelik / Risk Skoru"), unsafe_allow_html=True)
+            st.markdown(risk_skoru_html(analiz['risk_skoru'], "Bakım Durumu"), unsafe_allow_html=True)
             st.markdown(f"**AI Bakım Tavsiyesi:** {analiz['tavsiye']}")
         mobil_fieldsense_sonuc_goster(analiz, analiz.get("hava_analiz", hava))
         if st.button("🗺️ Mobil Analizi Haritaya İşle", key="mobil_analiz_harita_isle_btn"):
@@ -3503,7 +3500,7 @@ with b5:
         try:
             pdf_bytes = pdf_bytes_olustur(vp, pdf_name)
             mail_subject = f"GridAI PDF Rapor - {token}"
-            mail_body = f"GridAI saha raporu ektedir. Kullanıcı: {st.session_state.get('kullanici_adi','')}. Saha kodu: {token}. Lokasyon: {adres_detay}. Risk: %{vp.get('risk_skoru', 0)}"
+            mail_body = f"GridAI saha raporu ektedir. Kullanıcı: {st.session_state.get('kullanici_adi','')}. Saha kodu: {token}. Lokasyon: {adres_detay}. Genel hat sağlık skoru: %{vp.get('saglik_skoru', 0)}"
             ok, msg = smtp_rapor_gonder(rapor_mail, mail_subject, mail_body, pdf_bytes, pdf_name)
             if ok:
                 st.success(msg)
@@ -3514,7 +3511,7 @@ with b5:
 
 with b6:
     telefon = st.text_input("WhatsApp", value=_secret_get("CONTACT_PHONE", "905XXXXXXXXX"), label_visibility="collapsed")
-    whatsapp_msg = requests.utils.quote(f"GridAI rapor özeti: {token} | Kullanıcı: {st.session_state.get('kullanici_adi','')} | Lokasyon: {adres_detay} | Risk: %{vp.get('risk_skoru', 0)} | Panel: {_secret_get('PUBLIC_APP_URL','')}")
+    whatsapp_msg = requests.utils.quote(f"GridAI rapor özeti: {token} | Kullanıcı: {st.session_state.get('kullanici_adi','')} | Lokasyon: {adres_detay} | Genel hat sağlık skoru: %{vp.get('saglik_skoru', 0)} | Panel: {_secret_get('PUBLIC_APP_URL','')}")
     wa_link = f"https://wa.me/{telefon}?text={whatsapp_msg}"
     if st.button("📱 WhatsApp QR", use_container_width=True):
         st.session_state["wa_qr_link"] = wa_link
@@ -3569,12 +3566,12 @@ if panel:
     else:
         baslik = "☎️ İletişim"
         telefon_iletisim = _secret_get("CONTACT_PHONE", "Telefon numarası Secrets > CONTACT_PHONE alanına eklenecek")
-        icerik = f"<p>📞 <b>Telefon:</b> {telefon_iletisim}</p><p>📷 <b>Instagram:</b> @gridai_official</p><p>✉️ <b>E-posta:</b> cfa6161@gmail.com</p><p><b>Proje:</b> GridAI - DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.</p>"
+        icerik = f"<p>📞 <b>Telefon:</b> {telefon_iletisim}</p><p>📷 <b>Instagram:</b> @gridai_official</p><p>✉️ <b>E-posta:</b> cfa6161@gmail.com</p><p><b>Proje:</b> GridAI - DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU</p>"
     st.markdown(f"""
     <div class="gridai-card">
         <h3 style="margin-top:0; color:#38BDF8 !important;">{baslik}</h3>
         {icerik}
-        <small style="color:#CBD5E1;">DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.</small>
+        <small style="color:#CBD5E1;">DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU</small>
     </div>
     """, unsafe_allow_html=True)
 
@@ -3582,5 +3579,5 @@ if panel:
 # Böylece Cloud tarafında HTML kodu düz metin olarak görünmez ve React/DOM çakışması oluşmaz.
 st.markdown("---")
 st.markdown("### ⚡ GridAI")
-st.caption("DRONE VE TELEFON GÖRÜNTÜLERİNİ ELEKTRİK DAĞITIM ŞEBEKESİ İÇİN RİSK TESPİTİNE, HARİTA KAYDINA VE SAHA RAPORUNA DÖNÜŞTÜREN BAKIM KARAR DESTEK PLATFORMUDUR.")
+st.caption("DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DAĞITIM ŞEBEKESİ GÖRÜNTÜ ANALİZİ VE BAKIM KARAR DESTEK PLATFORMU")
 st.caption("GridAI MVP Platformu · Jüri Kayıt Final · © 2026 GridAI Enterprise. Tüm hakları saklıdır.")
