@@ -262,9 +262,13 @@ if "canli_kamera_konum_mesaj" not in st.session_state: st.session_state.canli_ka
 if "supabase_son_mesaj" not in st.session_state: st.session_state.supabase_son_mesaj = ""
 if "kullanici_adi" not in st.session_state: st.session_state.kullanici_adi = "Saha Kullanıcısı"
 if "kullanici_gecmisi" not in st.session_state: st.session_state.kullanici_gecmisi = []
-if "yardimci_sahne_tahmini" not in st.session_state: st.session_state.yardimci_sahne_tahmini = True
+if "yardimci_sahne_tahmini" not in st.session_state: st.session_state.yardimci_sahne_tahmini = False
 if "sesli_komut_aktif" not in st.session_state: st.session_state.sesli_komut_aktif = True
 if "cihaz_konum_otomatik_mesaj" not in st.session_state: st.session_state.cihaz_konum_otomatik_mesaj = ""
+if "gorsel_kutu_modu" not in st.session_state: st.session_state.gorsel_kutu_modu = "Sade - ana risk kutusu"
+if "mobil_ar_rehber_aktif" not in st.session_state: st.session_state.mobil_ar_rehber_aktif = True
+if "mobil_pdf_hazirla_komutu" not in st.session_state: st.session_state.mobil_pdf_hazirla_komutu = False
+if "son_sesli_komut_mesaji" not in st.session_state: st.session_state.son_sesli_komut_mesaji = ""
 
 # V7.1 QR tabanlı mobil saha terminali modu
 try:
@@ -1014,6 +1018,66 @@ def _kutu_etiket_metni(p):
     return f"TESPİT: {label} %{conf:.0f}"
 
 
+
+def _bbox_iou(b1, b2):
+    try:
+        ax1, ay1, ax2, ay2 = [float(x) for x in b1]
+        bx1, by1, bx2, by2 = [float(x) for x in b2]
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        area_a = max(1.0, (ax2 - ax1) * (ay2 - ay1))
+        area_b = max(1.0, (bx2 - bx1) * (by2 - by1))
+        return inter / (area_a + area_b - inter + 1e-6)
+    except Exception:
+        return 0.0
+
+
+def _prediction_oncelik_puani(p):
+    label = str(p.get("class", ""))
+    conf = float(p.get("confidence", 0) or 0)
+    score = conf
+    if _tespit_hasarli_mi(label):
+        score += 120
+    if _yardimci_sahne_mi(p):
+        score -= 80
+    if any(k in label.lower() for k in ["izolat", "insulator", "travers", "bağlant", "baglant", "direk", "pole", "iletken", "hat"]):
+        score += 20
+    return score
+
+
+def sade_tespitleri_sec(predictions, img_w=None, img_h=None, max_kutu=3):
+    """Jüri kaydı için kutu karmaşasını azaltır.
+
+    Mantık:
+    - Hasarlı/arıza sınıfları en yüksek önceliğe alınır.
+    - Yardımcı sahne kutuları sadece gerçek Roboflow/arıza kutusu yoksa gösterilir.
+    - İç içe geçen kutularda en güvenilir/öncelikli olan kalır.
+    """
+    preds = []
+    for p in predictions or []:
+        bbox = p.get("bbox") or _prediction_bbox_normalize(p, img_w=img_w, img_h=img_h)
+        if not bbox:
+            continue
+        q = dict(p)
+        q["bbox"] = bbox
+        preds.append(q)
+    if not preds:
+        return []
+
+    gercek = [p for p in preds if not _yardimci_sahne_mi(p)]
+    hasarli = [p for p in gercek if _tespit_hasarli_mi(p.get("class", ""))]
+    kaynak = hasarli or gercek or preds
+    kaynak = sorted(kaynak, key=_prediction_oncelik_puani, reverse=True)
+    secilen = []
+    for p in kaynak:
+        if all(_bbox_iou(p["bbox"], s["bbox"]) < 0.38 for s in secilen):
+            secilen.append(p)
+        if len(secilen) >= max_kutu:
+            break
+    return secilen
+
 def _font_yukle_gorsel(font_size):
     adaylar = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -1041,7 +1105,9 @@ def kutulari_ciz(image_pil, predictions):
     kalinlik = max(5, int(min(w, h) * 0.010))
     font_size = max(18, int(min(w, h) * 0.030))
     font = _font_yukle_gorsel(font_size)
-    for p in predictions:
+    kutu_modu = str(st.session_state.get("gorsel_kutu_modu", "Sade - ana risk kutusu"))
+    cizilecek_predictions = sade_tespitleri_sec(predictions, img_w=w, img_h=h, max_kutu=2 if "Sade" in kutu_modu else 5) if "Sade" in kutu_modu else list(predictions)
+    for p in cizilecek_predictions:
         bbox = p.get("bbox") or _prediction_bbox_normalize(p, img_w=w, img_h=h)
         if not bbox:
             continue
@@ -1273,9 +1339,9 @@ def sesli_komut_bileseni():
     st.markdown(
         """
         <div class='voice-box'>
-        <b>Çalışma mantığı:</b> Telefonda ses kaydı alınır; kayıt kalıcı arşive yazılmaz.
-        Ardından aşağıdaki komut seçimi, sesli komutun güvenli MVP karşılığı olarak iş akışını ilerletir.
-        Bu yöntem jüri demosunda mikrofon/DOM hatası çıkarırsa bile ana analiz sistemini düşürmez.
+        <b>🟢 Sesli komut aktif.</b><br>
+        Komut kelimeleri: <b>konum al</b>, <b>kamera aç</b>, <b>görüntü al</b>, <b>analiz yap</b>, <b>pdf indir</b>, <b>arşive kaydet</b>.<br>
+        MVP güvenliği için ses kaydı alınır; komut aşağıdaki yönlendirme butonlarıyla iş akışına bağlanır. Native mobil fazda gerçek Türkçe konuşma algılama eklenecektir.
         </div>
         """, unsafe_allow_html=True
     )
@@ -1298,28 +1364,38 @@ def sesli_komut_bileseni():
     else:
         st.warning("Bu Streamlit sürümünde native mikrofon kaydı yok. Komutu seçerek mobil yönlendirme paneliyle devam edin.")
 
-    komut = st.selectbox("Sesli komut karşılığı / Komut seç", ["Bekle", "Konum al", "Kamera aç", "Çekim yap", "Analiz et", "Rapor oluştur"], key="voice_command_select")
+    komut = st.selectbox("Sesli komut karşılığı / Komut seç", ["Bekle", "Konum al", "Kamera aç", "Görüntü al", "Analiz yap", "PDF indir", "Arşive kaydet"], key="voice_command_select")
     if st.button("▶️ Komutu Uygula", key="voice_command_apply", use_container_width=True):
         st.session_state.voice_last_command = komut
-        if komut in ["Kamera aç", "Çekim yap"]:
+        if komut in ["Kamera aç", "Görüntü al"]:
             st.session_state.mobil_kamera_komutu = True
             st.session_state.mobil_analiz_komutu = False
-        elif komut == "Analiz et":
+            st.session_state.son_sesli_komut_mesaji = "Kamera adımı aktif. Fotoğraf çekilince analiz otomatik çalışır."
+        elif komut == "Analiz yap":
             st.session_state.mobil_analiz_komutu = True
+            st.session_state.son_sesli_komut_mesaji = "Analiz adımı aktif. Son fotoğraf varsa sonuç gösterilir; yoksa önce kamera ile görüntü alın."
         elif komut == "Konum al":
             st.session_state.mobil_konum_komutu = True
-        elif komut == "Rapor oluştur":
+            st.session_state.son_sesli_komut_mesaji = "Konum adımı aktif. Cihaz konum izni istenecek."
+        elif komut == "PDF indir":
             st.session_state.mobil_rapor_komutu = True
+            st.session_state.mobil_pdf_hazirla_komutu = True
+            st.session_state.son_sesli_komut_mesaji = "PDF çıktı adımı aktif. Alt kısımdaki çıktı bölümünden rapor indirilebilir."
+        elif komut == "Arşive kaydet":
+            st.session_state.mobil_arsiv_komutu = True
+            st.session_state.son_sesli_komut_mesaji = "Arşiv adımı aktif. Son analiz Supabase/yerel arşiv kuyruğuna eklenir."
 
     aktif_komut = st.session_state.get("voice_last_command", komut)
     if aktif_komut == "Konum al":
         st.success("📍 Konum adımı: Cihaz konum izni verin veya manuel enlem-boylam girin. Analiz bu konumla ilişkilendirilir.")
-    elif aktif_komut in ["Kamera aç", "Çekim yap"]:
-        st.success("📷 Kamera adımı: Aşağıdaki mobil kamera alanından fotoğraf çekin. Görsel analiz kuyruğuna alınır.")
-    elif aktif_komut == "Analiz et":
-        st.success("🤖 Analiz adımı: Fotoğraf çekildiyse Roboflow/YOLO tespiti, kutu çizimi ve risk skoru kontrol edilir.")
-    elif aktif_komut == "Rapor oluştur":
-        st.success("📄 Rapor adımı: PDF Rapor, SAP Excel veya WhatsApp QR alanından çıktı alın.")
+    elif aktif_komut in ["Kamera aç", "Görüntü al"]:
+        st.success("📷 Kamera adımı: Aşağıdaki mobil kamera alanından fotoğraf çekin. Görsel analiz kuyruğuna alınır ve otomatik analiz edilir.")
+    elif aktif_komut == "Analiz yap":
+        st.success("🤖 Analiz adımı: Fotoğraf çekildiyse Roboflow/YOLO tespiti, sade kutu çizimi ve risk skoru kontrol edilir.")
+    elif aktif_komut == "PDF indir":
+        st.success("📄 PDF adımı: Son analiz varsa çıktı bölümünden rapor indirilebilir.")
+    elif aktif_komut == "Arşive kaydet":
+        st.success("🗄️ Arşiv adımı: Son mobil analiz kayıt kuyruğuna ve uygun ise Supabase arşivine alınır.")
     else:
         st.info("Komut bekleniyor. Ses kaydı aldıktan sonra komutu seçip uygulayın.")
 
@@ -1764,6 +1840,64 @@ def katener_hesapla(vp):
         yorum = "Sehim göstergesi düşük seviyededir. Hesap varsayımsal parametreler ile karar destek amaçlıdır."
     return {"uygun": True, "L": L, "w": w, "H": H, "f": f, "f_duzeltilmis": f_duzeltilmis, "risk": round(risk,1), "yorum": yorum, "ruzgar": ruzgar, "ortam_c": ortam_c}
 
+
+
+def katener_grafik_png_buf(kt, width=680, height=250):
+    """ReportLab için hafif PIL tabanlı FieldSense sehim grafiği üretir."""
+    buf = io.BytesIO()
+    img = Image.new("RGB", (width, height), "#F8FAFC")
+    d = ImageDraw.Draw(img)
+    # Başlık ve çerçeve
+    d.rounded_rectangle([8, 8, width-8, height-8], radius=18, outline="#00A8FF", width=3, fill="#FFFFFF")
+    try:
+        font_b = _font_yukle_gorsel(24)
+        font_s = _font_yukle_gorsel(18)
+    except Exception:
+        font_b = font_s = None
+    d.text((28, 22), "GridAI FieldSense - Canlı Sehim Ön Kontrol Grafiği", fill="#004B32", font=font_b)
+    if not kt or not kt.get("uygun"):
+        d.text((28, 92), "Bu görsel için sehim grafiği uygun değil.", fill="#7F1D1D", font=font_s)
+        img.save(buf, format="PNG"); buf.seek(0); return buf
+    L = float(kt.get("L", 80) or 80)
+    sag = float(kt.get("f_duzeltilmis", kt.get("f", 0.6)) or 0.6)
+    x0, x1 = 60, width - 60
+    y_top, y_mid = 85, 148
+    span_px = x1 - x0
+    # direkler
+    d.line([x0, y_top, x0, height-45], fill="#334155", width=8)
+    d.line([x1, y_top, x1, height-45], fill="#334155", width=8)
+    d.ellipse([x0-7, y_top-7, x0+7, y_top+7], fill="#0EA5E9")
+    d.ellipse([x1-7, y_top-7, x1+7, y_top+7], fill="#0EA5E9")
+    # parabolik sehim görseli
+    pts = []
+    sag_px = max(18, min(86, int(sag * 60)))
+    for i in range(0, 101):
+        t = i / 100
+        x = x0 + t * span_px
+        y = y_mid + sag_px * (4 * t * (1 - t))
+        pts.append((x, y))
+    d.line(pts, fill="#004B32", width=6)
+    d.line([x0, y_mid, x1, y_mid], fill="#CBD5E1", width=2)
+    midx = (x0 + x1) / 2
+    d.line([midx, y_mid, midx, y_mid+sag_px], fill="#EF4444", width=3)
+    d.text((midx+8, y_mid+sag_px/2-8), f"~{sag:.2f} m", fill="#EF4444", font=font_s)
+    d.text((x0, height-34), f"Açıklık: {L:.0f} m | Risk: %{kt.get('risk','-')} | Karar destek amaçlıdır", fill="#334155", font=font_s)
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
+
+
+def fieldsense_pdf_ozet_rows(vp):
+    kt = katener_hesapla(vp)
+    sb = stefan_boltzmann_hesapla(vp)
+    analiz_sayisi = len(vp.get("analizler", []) or [])
+    rows = [
+        ["Görsel analiz", f"{analiz_sayisi} kayıt", "Roboflow/YOLO sonucu, konum ve veri güveniyle birlikte değerlendirilir."],
+        ["Sehim ön kontrol", (f"%{kt.get('risk')} risk" if kt.get("uygun") else "Uygun görsel bekleniyor"), kt.get("yorum", "")],
+        ["Isıl ön kontrol", (f"%{sb.get('risk')} risk" if sb.get("uygun") else "Termal veri bekleniyor"), sb.get("yorum", "")],
+        ["Kullanım sınırı", "Karar destek", "Bu bölüm kesin ölçüm değil; saha doğrulamasına hazırlık ve bakım önceliği için kullanılır."],
+    ]
+    return kt, sb, rows
 
 def pdf_bytes_olustur(vp, pdf_name):
     genis_pdf_olustur(pdf_name, vp)
@@ -2368,7 +2502,17 @@ def genis_pdf_olustur(path, vp):
     body = ParagraphStyle("B", fontName=FONT_REG, fontSize=9.5, leading=14, textColor=colors.HexColor("#334155"))
     bold = ParagraphStyle("BB", fontName=FONT_BLD, fontSize=9.5, leading=14, textColor=colors.HexColor("#1E293B"))
     story = []
-    story.append(Paragraph("GRIDAI KAPSAMLI ARIZA VE DURUM RAPORU", title))
+    # Marka logolu minimalist rapor kapağı
+    try:
+        _logo_data = gridai_logo_bytes()
+        if _logo_data:
+            _logo_buf = io.BytesIO(_logo_data); _logo_buf.seek(0)
+            story.append(RLImage(_logo_buf, width=150, height=48))
+            story.append(Spacer(1, 8))
+    except Exception:
+        pass
+    story.append(Paragraph("GRIDAI SAHA ANALİZ VE BAKIM KARAR DESTEK RAPORU", title))
+    story.append(Paragraph("Görünür risk • Doğrulanabilir rapor • Öncelikli bakım kararı", ParagraphStyle("SubT", fontName=FONT_BLD, fontSize=10.5, textColor=colors.HexColor("#00A8FF"), alignment=1, spaceAfter=12)))
     rapor_tarihi_guncel = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     story.append(Paragraph(f"Rapor Tarihi: {rapor_tarihi_guncel} | Saha Kodu: {vp['token']} | Kullanıcı: {vp.get('kullanici_adi','')}", ParagraphStyle("S", fontName=FONT_REG, alignment=1, spaceAfter=18)))
     story.append(Paragraph("Saha ve Ekip Bilgileri", h2))
@@ -2410,7 +2554,23 @@ def genis_pdf_olustur(path, vp):
     else:
         story.append(Paragraph("Henüz görsel/Roboflow analizi olmadığı için elektrik hattı sağlık skoru hesaplanmadı. Skor; en az bir doğrulanmış görsel analizi sonrasında üretilecektir.", body))
     story.append(Spacer(1, 16))
-    story.append(Paragraph("Donanımsız Isınma Teknolojisi - Stefan-Boltzmann Risk Göstergesi", h2))
+    story.append(Paragraph("GridAI FieldSense Karar Destek Bölümü", h2))
+    kt_fs, sb_fs, fs_rows = fieldsense_pdf_ozet_rows(vp)
+    fs_table_rows = [[Paragraph("Başlık", bold), Paragraph("Sonuç", bold), Paragraph("Açıklama", bold)]]
+    for _baslik, _sonuc, _aciklama in fs_rows:
+        fs_table_rows.append([Paragraph(str(_baslik), body), Paragraph(str(_sonuc), body), Paragraph(str(_aciklama), body)])
+    t_fs = Table(fs_table_rows, colWidths=[95, 105, 310])
+    t_fs.setStyle(TableStyle([("BACKGROUND",(0,0),(-1,0),colors.HexColor("#E0F2FE")), ("TEXTCOLOR",(0,0),(-1,0),colors.HexColor("#004B32")), ("GRID",(0,0),(-1,-1),0.5,colors.lightgrey), ("VALIGN",(0,0),(-1,-1),"TOP"), ("PADDING",(0,0),(-1,-1),7)]))
+    story.append(t_fs)
+    try:
+        if kt_fs.get("uygun"):
+            story.append(Spacer(1, 10))
+            story.append(RLImage(katener_grafik_png_buf(kt_fs), width=460, height=170))
+    except Exception:
+        pass
+    story.append(Paragraph("FieldSense, görsel ve saha verilerinden ön risk göstergesi üretir. Termal kamera veya fiziksel ölçüm yerine geçmez; saha doğrulamasına hazırlık ve bakım önceliği için kullanılır.", body))
+    story.append(Spacer(1, 16))
+    story.append(Paragraph("Donanımsız Isınma Teknolojisi - Karar Destek Göstergesi", h2))
     sb = stefan_boltzmann_hesapla(vp)
     if not sb.get('uygun'):
         sb_rows = [[Paragraph("Durum", bold), Paragraph(sb['yorum'], body)]]
@@ -2474,6 +2634,16 @@ def genis_pdf_olustur(path, vp):
 with st.sidebar:
     gridai_logo_goster(width=250)
     st.markdown("""<div class="logo-container"><h2 style="margin:0;">⚡ GridAI Panel</h2></div>""", unsafe_allow_html=True)
+    if st.button("🎬 Jüri Kayıt Modu", use_container_width=True, help="Sunum kaydı için sade ve stabil demo ayarlarını hazırlar."):
+        st.session_state.tespit_kutulari_goster = True
+        st.session_state.gorsel_kutu_modu = "Sade - ana risk kutusu"
+        st.session_state.yardimci_sahne_tahmini = False
+        st.session_state.sesli_komut_aktif = True
+        st.session_state.mobil_ar_rehber_aktif = True
+        st.session_state.nanoglow_fullscreen_mode = True
+        st.session_state.mobil_field_mode = True
+        st.session_state.loglar.append({"Tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "İşlem": "JURI_MOD", "Detay": "Kayıt modu açıldı: kutular açık, yardımcı kutular kapalı, mobil FieldSense aktif."})
+        st.success("Kayıt modu hazır: sade kutu görünümü, mobil FieldSense ve NanoGlow demo aktif.")
 
     st.subheader("👤 Kullanıcı")
     onceki_kullanici = st.session_state.get("kullanici_adi", "Saha Kullanıcısı")
@@ -2587,12 +2757,19 @@ with st.sidebar:
         value=bool(st.session_state.get("tespit_kutulari_goster", True)),
         help="Model object detection kutusu döndürüyorsa hem arayüzde hem PDF raporda çizilir. Classification modelinde kutu üretilemez."
     )
+    st.session_state.gorsel_kutu_modu = st.selectbox(
+        "Kutu görünümü",
+        ["Sade - ana risk kutusu", "Detaylı - tüm kutular"],
+        index=0 if str(st.session_state.get("gorsel_kutu_modu", "Sade - ana risk kutusu")).startswith("Sade") else 1,
+        help="Sunum/kayıt için sade mod önerilir. İç içe kutular azalır, ana riskli tespit öne çıkar."
+    )
     st.session_state.yardimci_sahne_tahmini = st.checkbox(
         "GridAI yardımcı sahne işaretleyici",
-        value=bool(st.session_state.get("yardimci_sahne_tahmini", True)),
-        help="Roboflow sınıfı yoksa direk/hat/vejetasyon gibi sahne adaylarını düşük güvenli yardımcı katman olarak gösterir; kesin arıza iddiası değildir."
+        value=bool(st.session_state.get("yardimci_sahne_tahmini", False)),
+        help="Roboflow sınıfı yoksa direk/hat/vejetasyon gibi sahne adaylarını düşük güvenli yardımcı katman olarak gösterir; kesin arıza iddiası değildir. Kayıt için kapalı önerilir."
     )
     st.session_state.sesli_komut_aktif = st.checkbox("Mobil sesli komut aktif", value=bool(st.session_state.get("sesli_komut_aktif", True)))
+    st.session_state.mobil_ar_rehber_aktif = st.checkbox("Mobil AR çekim rehberi aktif", value=bool(st.session_state.get("mobil_ar_rehber_aktif", True)))
 
 
 
@@ -2690,6 +2867,13 @@ with top_logo_col:
     gridai_logo_goster(width=260)
 with top_title_col:
     st.title("⚡ Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu")
+
+with st.expander("🎬 Sunum kaydı için hızlı kontrol", expanded=False):
+    st.markdown("""
+    **Önerilen kayıt akışı:** Jüri kullanıcı adı gir → konum/CBS seç → görsel yükle veya mobil QR ile kamera testi yap → Roboflow kutusunu göster → harita, risk, PDF/Excel çıktısını göster → FieldSense ve NanoGlow canlı simülasyonunu kısa göster.
+
+    **Stabil demo notu:** Gerçek zamanlı video/AR ve tam handsfree sesli komut, sonraki mobil uygulama fazı olarak anlatılır. MVP'de güvenli akış: QR ile mobil giriş, çek-anında-analiz, rapor ve arşivdir.
+    """)
 st.markdown(f"**Saha Kodu:** `{token}` | **Lokasyon:** {adres_detay}")
 st.caption(f"Konum kaynağı: {st.session_state.get('son_konum_kaynagi', '')}")
 if st.session_state.get("cihaz_konum_otomatik_mesaj") and not st.session_state.get("cihaz_konum"):
@@ -3051,6 +3235,19 @@ elif secim == "Mobil Saha Terminali":
       Streamlit web kamerası kesintisiz video akışı yerine yakalanan kareyi anında işler. Fotoğraf çekildiği anda Roboflow/YOLO tespiti, kutu çizimi, FieldSense hesapları ve risk skoru otomatik gösterilir.
     </div>
     """, unsafe_allow_html=True)
+    if st.session_state.get("mobil_ar_rehber_aktif", True):
+        st.markdown("""
+        <div style="background:#0F172A;color:#E2E8F0;border:2px dashed #00A8FF;border-radius:18px;padding:14px;margin:12px 0;text-align:center;">
+          <div style="font-weight:900;color:#7DD3FC;font-size:18px;">AR Çekim Rehberi / Güvenli Kadraj</div>
+          <div style="font-size:13px;margin-top:6px;">Direği ortala • İzolatör/iletken aynı karede olsun • Yakın çekimde sehim hesabı kapalıdır • Güvenli mesafe korunur</div>
+          <div style="margin:12px auto 4px;max-width:420px;height:160px;border:2px solid #38BDF8;border-radius:16px;position:relative;background:linear-gradient(135deg,#082F49,#064E3B);">
+            <div style="position:absolute;left:50%;top:0;bottom:0;border-left:2px dashed rgba(255,255,255,.45);"></div>
+            <div style="position:absolute;left:0;right:0;top:50%;border-top:2px dashed rgba(255,255,255,.45);"></div>
+            <div style="position:absolute;left:18px;top:18px;background:rgba(0,0,0,.35);padding:6px 10px;border-radius:999px;">📍 Konum + Kamera</div>
+            <div style="position:absolute;right:18px;bottom:18px;background:rgba(0,0,0,.35);padding:6px 10px;border-radius:999px;">🤖 Çekince analiz</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
     if st.session_state.get("mobil_kamera_komutu", False):
         st.success("🎙️ Sesli komut kamera adımını aktif etti. Aşağıdan fotoğraf çekin; sistem otomatik analiz edecektir.")
     kamera_gorseli = st.camera_input("📷 Mobil/Tablet Kamerası ile Fotoğraf Çek", key="mobil_live_camera_input")
@@ -3299,4 +3496,4 @@ if panel:
 st.markdown("---")
 st.markdown("### ⚡ GridAI")
 st.caption("Drone ve Yapay Zeka Tabanlı Elektrik Dağıtım Hattı Görüntü Analizi ve Erken Risk Tespit Platformu")
-st.caption("GridAI MVP Platformu · © 2026 GridAI Enterprise. Tüm hakları saklıdır.")
+st.caption("GridAI MVP Platformu · Jüri Kayıt Final · © 2026 GridAI Enterprise. Tüm hakları saklıdır.")
