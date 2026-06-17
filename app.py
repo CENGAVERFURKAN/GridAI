@@ -54,7 +54,7 @@ st.set_page_config(page_title="GridAI | DRONE VE YAPAY ZEKA TABANLI ELEKTRİK DA
 )
 
 
-st.markdown('\n/* === GridAI Sidebar Açılabilirlik Düzeltmesi V7.4.5 ===\n   Amaç: Kullanıcı sol sidebar\'ı kapatsa bile Streamlit\'in açma oku/menü kontrolü görünür kalsın.\n*/\n<style>\n[data-testid="collapsedControl"],\n[data-testid="stSidebarCollapsedControl"] {\n    display: flex !important;\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n    z-index: 999999 !important;\n}\nbutton[kind="header"],\nheader button,\n[data-testid="stHeader"] button {\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n}\n[data-testid="stSidebar"] {\n    z-index: 9999 !important;\n}\n.gridai-sidebar-help {\n    position: fixed;\n    left: 10px;\n    bottom: 12px;\n    z-index: 999998;\n    background: rgba(0, 75, 50, 0.92);\n    color: white;\n    padding: 8px 10px;\n    border-radius: 999px;\n    font-size: 12px;\n    box-shadow: 0 6px 20px rgba(0,0,0,0.20);\n}\n@media (max-width: 768px) {\n    .gridai-sidebar-help {\n        font-size: 11px;\n        padding: 7px 9px;\n    }\n}\n</style>\n', unsafe_allow_html=True)
+st.markdown('\n<style>\n[data-testid="collapsedControl"],\n[data-testid="stSidebarCollapsedControl"] {\n    display: flex !important;\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n    z-index: 999999 !important;\n}\nbutton[kind="header"],\nheader button,\n[data-testid="stHeader"] button {\n    visibility: visible !important;\n    opacity: 1 !important;\n    pointer-events: auto !important;\n}\n[data-testid="stSidebar"] {\n    z-index: 9999 !important;\n}\n.gridai-sidebar-help {\n    position: fixed;\n    left: 10px;\n    bottom: 12px;\n    z-index: 999998;\n    background: rgba(0, 75, 50, 0.92);\n    color: white;\n    padding: 8px 10px;\n    border-radius: 999px;\n    font-size: 12px;\n    box-shadow: 0 6px 20px rgba(0,0,0,0.20);\n}\n@media (max-width: 768px) {\n    .gridai-sidebar-help {\n        font-size: 11px;\n        padding: 7px 9px;\n    }\n}\n</style>\n', unsafe_allow_html=True)
 
 
 
@@ -2727,7 +2727,7 @@ def genis_pdf_olustur(path, vp):
 with st.sidebar:
     gridai_logo_goster(width=250)
     st.markdown("""<div class="logo-container"><h2 style="margin:0;">⚡ GridAI Panel</h2></div>""", unsafe_allow_html=True)
-    if st.button("🎬 Jüri Kayıt Modu", use_container_width=True, help="Sunum kaydı için sade ve stabil demo ayarlarını hazırlar."):
+    if st.button("🎬 2. Aşama Teknik Demo Modu", use_container_width=True, help="PRODİS/mentor/pilot gösterimi için sade ve stabil demo ayarlarını hazırlar."):
         st.session_state.tespit_kutulari_goster = True
         st.session_state.gorsel_kutu_modu = "Sade - ana risk kutusu"
         st.session_state.yardimci_sahne_tahmini = False
@@ -2735,8 +2735,8 @@ with st.sidebar:
         st.session_state.mobil_ar_rehber_aktif = True
         st.session_state.nanoglow_fullscreen_mode = True
         st.session_state.mobil_field_mode = True
-        st.session_state.loglar.append({"Tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "İşlem": "JURI_MOD", "Detay": "Kayıt modu açıldı: kutular açık, yardımcı kutular kapalı, mobil FieldSense aktif."})
-        st.success("Kayıt modu hazır: sade kutu görünümü, mobil FieldSense ve NanoGlow demo aktif.")
+        st.session_state.loglar.append({"Tarih": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "İşlem": "TEKNIK_DEMO_MOD", "Detay": "2. aşama teknik demo modu açıldı: sade kutular, mobil FieldSense, Field Proof, Impact ve NanoGlow demo aktif."})
+        st.success("2. aşama demo hazır: sade kutu görünümü, FieldSense, Field Proof, Impact ve NanoGlow demo aktif.")
 
     st.subheader("👤 Kullanıcı")
     onceki_kullanici = st.session_state.get("kullanici_adi", "Saha Kullanıcısı")
@@ -2969,8 +2969,51 @@ with st.expander("🎬 Sunum kaydı için hızlı kontrol", expanded=False):
 
     **Stabil demo notu:** Gerçek zamanlı video/AR ve tam handsfree sesli komut, sonraki mobil uygulama fazı olarak anlatılır. MVP'de güvenli akış: QR ile mobil giriş, çek-anında-analiz, rapor ve arşivdir.
     """)
+
+with st.expander("✅ 2. Aşama Teknik Demo Akışı", expanded=True):
+    st.markdown("""
+    <div class='gridai-card'>
+    <b>Bu sürümün amacı:</b> GridAI'yi çalışan MVP olarak, tek ve güvenli bir bakım karar destek akışında göstermek.<br><br>
+    <b>1) Görüntü → AI kusur tespiti:</b> Drone/telefon görseli Roboflow veya demo modeliyle analiz edilir.<br>
+    <b>2) Field Proof™:</b> Konum, zaman, netlik, hash ve tekrar kontrolüyle kanıt güven skoru üretilir.<br>
+    <b>3) FieldSense™:</b> Telefon görüntüsü, hava, rüzgâr, hat akımı varsayımı ve ses verisiyle ön risk değerlendirmesi yapılır.<br>
+    <b>4) Impact Maintenance:</b> Kusur tipi, risk, kanıt güveni ve konuma göre bakım önceliği önerilir.<br>
+    <b>5) NanoGlow™:</b> Faz 2 laboratuvar donanım sinyali yazılım tarafında simülasyon/doğrulama kartı olarak gösterilir.<br><br>
+    <span class='muted-safe'><b>Güvenli iddia:</b> Bu MVP kesin ölçüm cihazı değil; saha önceliklendirme ve raporlama karar destek platformudur.</span>
+    </div>
+    """, unsafe_allow_html=True)
 st.markdown(f"**Saha Kodu:** `{token}` | **Lokasyon:** {adres_detay}")
 st.caption(f"Konum kaynağı: {st.session_state.get('son_konum_kaynagi', '')}")
+
+with st.expander("📲 FlutterFlow için ortak veri modeli / API taslağı", expanded=False):
+    flutterflow_payload = {
+        "project": "GridAI FieldSense Mobile",
+        "report_token": token,
+        "pole_code": "Arsin F3-D61",
+        "user": st.session_state.get("kullanici_adi", "Saha Kullanıcısı"),
+        "location": {
+            "lat": round(float(enlem), 6),
+            "lon": round(float(boylam), 6),
+            "source": st.session_state.get("son_konum_kaynagi", ""),
+            "address": adres_detay,
+        },
+        "modules": {
+            "ai_detection": {"status": "ready", "source": "Roboflow/YOLO or demo mode"},
+            "field_proof": {"outputs": ["clarity_score", "gps_check", "timestamp", "hash", "duplicate_check", "proof_score"]},
+            "fieldsense": {"outputs": ["sag_precheck", "virtual_thermal_risk", "acoustic_warning"], "claim": "pre-risk / decision support"},
+            "impact_maintenance": {"outputs": ["priority_rank", "action_recommendation", "sap_pm_type"]},
+            "nanoglow": {"status": "phase_2_lab_prototype", "outputs": ["led_flash_detected", "hardware_signal_score"]},
+        },
+        "cta": "RAPORU ONAYLA & SAP PM TASLAĞI OLUŞTUR",
+    }
+    st.json(flutterflow_payload)
+    st.download_button(
+        "📥 FlutterFlow JSON veri modelini indir",
+        data=json.dumps(flutterflow_payload, ensure_ascii=False, indent=2).encode("utf-8"),
+        file_name=f"gridai_flutterflow_payload_{token}.json",
+        mime="application/json",
+        use_container_width=True,
+    )
 if st.session_state.get("cihaz_konum_otomatik_mesaj") and not st.session_state.get("cihaz_konum"):
     st.caption("Otomatik cihaz konumu: " + str(st.session_state.get("cihaz_konum_otomatik_mesaj")))
 
