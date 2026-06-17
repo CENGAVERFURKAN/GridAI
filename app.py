@@ -18,8 +18,7 @@ from PIL import Image, ImageDraw, ExifTags, ImageFont
 
 import folium
 from folium.plugins import HeatMap
-# Streamlit Cloud frontend stabilitesi için streamlit-folium/custom components render edilmiyor.
-# Folium yerine yerleşik st.map kullanılır.
+from streamlit_folium import st_folium
 
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage, PageBreak
@@ -3069,69 +3068,87 @@ st.markdown("---")
 
 # HARİTA STABİL MOD
 # NotFoundError/removeChild hatasını azaltmak için streamlit-folium yerine Streamlit'in yerleşik st.map bileşeni kullanılır.
-st.subheader("🗺️ Stabil CBS Haritası")
-mapc1, mapc2 = st.columns([3, 1])
-with mapc1:
-    st.caption(f"Harita merkezi: {float(enlem):.6f}, {float(boylam):.6f} | Kaynak: {st.session_state.get('son_konum_kaynagi', '')}")
-with mapc2:
-    if st.button("🔄 Haritayı Güncelle", key="harita_guncelle_btn", use_container_width=True):
-        st.session_state.harita_refresh_id = st.session_state.get("harita_refresh_id", 0) + 1
-        st.rerun()
+m = folium.Map(location=[enlem, boylam], zoom_start=14, tiles=None)
 
+folium.TileLayer("OpenStreetMap", name="Sokak Haritası").add_to(m)
+folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', attr='Google', name='Uydu Görünümü').add_to(m)
+folium.TileLayer(tiles='https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attr='OpenTopoMap', name='Topografik Harita').add_to(m)
+
+# Ortak Supabase kayıtları: telefon ve web panel aynı saha kayıtlarını görsün diye harita katmanına eklenir.
 supabase_kayitlar, supabase_okuma_mesaj = supabase_analizleri_getir(limit=75)
-map_rows = []
-map_rows.append({
-    "lat": float(enlem),
-    "lon": float(boylam),
-    "tip": "Aktif saha merkezi",
-    "tespit": "Merkez / CBS",
-    "risk": 35,
-    "kaynak": st.session_state.get('son_konum_kaynagi', '')
-})
 
+heat_points = []
 for r in supabase_kayitlar:
     try:
         if r.get("enlem") is not None and r.get("boylam") is not None:
-            map_rows.append({
-                "lat": float(r.get("enlem")),
-                "lon": float(r.get("boylam")),
-                "tip": "Ortak Supabase kaydı",
-                "tespit": str(r.get("tespit", "")),
-                "risk": float(r.get("risk_skoru") or 45),
-                "kaynak": str(r.get("konum_kaynagi", ""))
-            })
+            heat_points.append([float(r.get("enlem")), float(r.get("boylam")), max(0.15, min(float(r.get("risk_skoru") or 0) / 100.0, 1.0))])
+    except Exception:
+        pass
+for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
+    try:
+        agirlik = heatmap_agirligi_hesapla(a)
+        heat_points.append([float(a.get("lat", enlem)), float(a.get("lon", boylam)), agirlik])
+    except Exception:
+        pass
+if heat_points:
+    HeatMap(heat_points, name="Risk Ağırlıklı Isı Haritası", radius=22, blur=16, min_opacity=0.25).add_to(m)
+else:
+    st.caption("Isı haritası, analiz yapılan görsellerin bakım durumu + arıza sınıfı + veri güvenilirliğiyle oluşturulur. Henüz analiz noktası olmadığı için ısı katmanı boş.")
+folium.Marker([enlem, boylam], popup=f"{adres_detay}", icon=folium.Icon(color="red", icon="bolt", prefix="fa")).add_to(m)
+
+for r in supabase_kayitlar:
+    try:
+        if r.get("enlem") is None or r.get("boylam") is None:
+            continue
+        popup = f"""
+        <b>Ortak Kayıt / {r.get('rapor_token','')}</b><br>
+        Kullanıcı: {r.get('kullanici_adi','')}<br>
+        Cihaz: {r.get('cihaz_turu','')}<br>
+        Tespit: {r.get('tespit','')}<br>
+        Güven: %{r.get('guven',0)}<br>
+        Bakım Durumu: {r.get('risk_seviyesi','')}<br>
+        Konum Kaynağı: {r.get('konum_kaynagi','')}<br>
+        Tarih: {str(r.get('created_at',''))[:19]}
+        """
+        folium.CircleMarker(
+            location=[float(r.get("enlem")), float(r.get("boylam"))],
+            radius=6,
+            popup=folium.Popup(popup, max_width=340),
+            color="#F59E0B",
+            fill=True,
+            fill_color="#F59E0B",
+            fill_opacity=0.65,
+        ).add_to(m)
     except Exception:
         pass
 
 for a in (st.session_state.get("gorsel_kuyrugu", []) or st.session_state.get("son_analizler", [])):
     try:
-        map_rows.append({
-            "lat": float(a.get("lat", enlem)),
-            "lon": float(a.get("lon", boylam)),
-            "tip": "Aktif analiz",
-            "tespit": str(a.get("anomali", "")),
-            "risk": float(a.get("risk_skoru", 55) or 55),
-            "kaynak": str(a.get("konum_kaynagi", ""))
-        })
+        popup = f"""
+        <b>{a.get('dosya','Görsel')}</b><br>
+        Hash: {a.get('hash_kisa','')}<br>
+        Tespit: {a.get('anomali','')}<br>
+        Güven: %{a.get('guven',0)}<br>
+        Bakım Durumu: {a.get('risk_seviyesi','')}<br>
+        Konum Kaynağı: {a.get('konum_kaynagi','')}<br>
+        Isı Ağırlığı: {heatmap_agirligi_hesapla(a)}
+        """
+        folium.CircleMarker(
+            location=[float(a.get("lat", enlem)), float(a.get("lon", boylam))],
+            radius=8,
+            popup=folium.Popup(popup, max_width=320),
+            color="#38BDF8",
+            fill=True,
+            fill_color="#0F766E",
+            fill_opacity=0.8,
+        ).add_to(m)
     except Exception:
         pass
 
-df_map = pd.DataFrame(map_rows)
-if not df_map.empty:
-    try:
-        # st.map yerleşik Streamlit bileşenidir; streamlit-folium gibi iframe/custom component üretmez.
-        st.map(df_map[["lat", "lon"]], latitude="lat", longitude="lon", size=80, use_container_width=True)
-    except TypeError:
-        # Eski Streamlit sürümüne uyumlu geri dönüş.
-        st.map(df_map[["lat", "lon"]], use_container_width=True)
-    with st.expander("📍 Harita noktaları / kayıt özeti", expanded=False):
-        st.dataframe(df_map, use_container_width=True, hide_index=True)
-        google_url = f"https://www.google.com/maps?q={float(enlem):.6f},{float(boylam):.6f}"
-        st.markdown(f"[Google Maps üzerinde aç]({google_url})")
-else:
-    st.info("Harita için henüz koordinatlı kayıt yok. Manuel koordinat girin veya bir görsel analiz edin.")
-
-st.caption("Stabil demo notu: Katmanlı Folium haritası Streamlit Cloud'da frontend DOM hatası verebildiği için bu sürümde yerleşik st.map kullanılır. Gelişmiş katmanlı harita FlutterFlow/mobil veya sonraki Streamlit sürümünde tekrar açılabilir.")
+folium.LayerControl().add_to(m)
+st.caption("Katmanlı harita geri getirildi: Sokak / Uydu / Topografik katmanlar ve risk ısı haritası aktiftir.")
+map_dynamic_key = f"gridai_map_{round(float(enlem),6)}_{round(float(boylam),6)}_{len(heat_points)}_{len(supabase_kayitlar)}_{st.session_state.get('harita_refresh_id',0)}"
+st_folium(m, use_container_width=True, height=500, key=map_dynamic_key)
 
 st.markdown("### 🔮 5 Günlük Hava Tahmini (Open-Meteo)")
 st.caption("MGM entegrasyonu opsiyoneldir: resmi/kurumsal MGM veri erişimi sağlanırsa bu blok aynı tasarım korunarak MGM adaptörüne bağlanabilir. Şimdilik jüri demosunda kararlı çalışması için Open-Meteo kullanılır.")
